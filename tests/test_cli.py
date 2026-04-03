@@ -288,6 +288,9 @@ def test_html_svg_and_png_exports_are_generated(tmp_path: Path):
     assert "provider-shell-wrap" in html_text
     assert "--layout-scale" in html_text
     assert "--shell-width" in html_text
+    assert "function formatDateKey(value)" in html_text
+    assert "current.setUTCDate(current.getUTCDate() + 1);" in html_text
+    assert "toISOString().slice(0, 10)" not in html_text
     assert svg_path.read_text(encoding="utf-8").startswith("<svg")
     assert png_path.stat().st_size > 0
 

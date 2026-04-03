@@ -1121,6 +1121,8 @@ def render_html_document(payload: dict[str, Any]) -> str:
       const MAX_LAYOUT_SCALE = {MAX_LAYOUT_SCALE};
       const SCALEABLE_WEEK_THRESHOLD = {SCALEABLE_WEEK_THRESHOLD};
       const TEXT_SCALE_FACTOR = {TEXT_SCALE_FACTOR};
+      const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
       function scaleSpacing(value, scale) {{
         return Math.max(1, Math.round(value * scale));
@@ -1188,19 +1190,39 @@ def render_html_document(payload: dict[str, Any]) -> str:
         return new Intl.NumberFormat("en-US").format(value);
       }}
 
+      function parseDateKey(value) {{
+        const [year, month, day] = value.split("-").map(Number);
+        return new Date(Date.UTC(year, month - 1, day));
+      }}
+
+      function formatDateKey(value) {{
+        const year = value.getUTCFullYear();
+        const month = String(value.getUTCMonth() + 1).padStart(2, "0");
+        const day = String(value.getUTCDate()).padStart(2, "0");
+        return `${{year}}-${{month}}-${{day}}`;
+      }}
+
+      function formatTooltipDate(value) {{
+        const parsed = parseDateKey(value);
+        const weekday = WEEKDAY_NAMES[parsed.getUTCDay()];
+        const month = MONTH_NAMES[parsed.getUTCMonth()];
+        const day = String(parsed.getUTCDate()).padStart(2, "0");
+        return `${{weekday}} ${{month}} ${{day}} ${{parsed.getUTCFullYear()}}`;
+      }}
+
       function getAllDays(start, end) {{
         const days = [];
-        const current = new Date(`${{start}}T00:00:00`);
-        const endDate = new Date(`${{end}}T00:00:00`);
+        const current = parseDateKey(start);
+        const endDate = parseDateKey(end);
         while (current <= endDate) {{
-          days.push(current.toISOString().slice(0, 10));
-          current.setDate(current.getDate() + 1);
+          days.push(formatDateKey(current));
+          current.setUTCDate(current.getUTCDate() + 1);
         }}
         return days;
       }}
 
       function padToWeekStartMonday(days) {{
-        const weekday = (new Date(`${{days[0]}}T00:00:00`).getDay() + 6) % 7;
+        const weekday = (parseDateKey(days[0]).getUTCDay() + 6) % 7;
         return [...Array(weekday).fill(null), ...days];
       }}
 
@@ -1215,7 +1237,7 @@ def render_html_document(payload: dict[str, Any]) -> str:
       function getMonthLabel(week) {{
         const lastDay = [...week].reverse().find(Boolean);
         if (!lastDay) return null;
-        return new Date(`${{lastDay}}T00:00:00`).toLocaleString("en-US", {{ month: "short" }});
+        return MONTH_NAMES[parseDateKey(lastDay).getUTCMonth()];
       }}
 
       function buildMonthLabels(weeks) {{
@@ -1237,7 +1259,7 @@ def render_html_document(payload: dict[str, Any]) -> str:
           `<div class="tooltip-line">${{item.name}}: ${{formatTokenTotal(item.tokens.total)}}</div>`
         ).join("");
         tooltip.innerHTML = `
-          <div class="tooltip-title">${{new Date(`${{day}}T00:00:00`).toDateString()}}</div>
+          <div class="tooltip-title">${{formatTooltipDate(day)}}</div>
           <div class="tooltip-line">${{formatTokenTotal(row.total)}} total tokens</div>
           <div class="tooltip-line">In: ${{formatTokenTotal(row.input)}} | Out: ${{formatTokenTotal(row.output)}}</div>
           <div class="tooltip-line">Cache In: ${{formatTokenTotal(row.cache.input)}} | Cache Out: ${{formatTokenTotal(row.cache.output)}}</div>
