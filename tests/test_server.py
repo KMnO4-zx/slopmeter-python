@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import io
+import json
 
 import pytest
 
@@ -43,6 +44,64 @@ def test_create_snapshot_handler_returns_404_for_unknown_path():
 
     assert responses == [404]
     assert ("Content-Length", "0") in headers
+
+
+def test_create_snapshot_handler_exports_png_from_post_request():
+    captured: list[list[str]] = []
+    request_body = json.dumps({"providerIds": ["all", "codex"]}).encode("utf-8")
+
+    def export_png(provider_ids: list[str]) -> tuple[bytes, str]:
+        captured.append(provider_ids)
+        return b"png-bytes", "slopmeter_all_codex.png"
+
+    handler_class = create_snapshot_handler("<html></html>", export_png=export_png)
+    handler = object.__new__(handler_class)
+    responses: list[int] = []
+    headers: list[tuple[str, str]] = []
+
+    handler.path = "/api/export"
+    handler.headers = {"Content-Length": str(len(request_body))}
+    handler.rfile = io.BytesIO(request_body)
+    handler.wfile = io.BytesIO()
+    handler.send_response = lambda code: responses.append(code)
+    handler.send_header = lambda key, value: headers.append((key, value))
+    handler.end_headers = lambda: None
+
+    handler.do_POST()
+
+    assert captured == [["all", "codex"]]
+    assert responses == [200]
+    assert ("Content-Type", "image/png") in headers
+    assert ("Content-Disposition", 'attachment; filename="slopmeter_all_codex.png"') in headers
+    assert handler.wfile.getvalue() == b"png-bytes"
+
+
+def test_create_snapshot_handler_returns_400_for_invalid_export_request():
+    request_body = json.dumps({"providerIds": []}).encode("utf-8")
+
+    def export_png(_provider_ids: list[str]) -> tuple[bytes, str]:
+        raise ValueError("Select at least one provider to export.")
+
+    handler_class = create_snapshot_handler("<html></html>", export_png=export_png)
+    handler = object.__new__(handler_class)
+    responses: list[int] = []
+    headers: list[tuple[str, str]] = []
+
+    handler.path = "/api/export"
+    handler.headers = {"Content-Length": str(len(request_body))}
+    handler.rfile = io.BytesIO(request_body)
+    handler.wfile = io.BytesIO()
+    handler.send_response = lambda code: responses.append(code)
+    handler.send_header = lambda key, value: headers.append((key, value))
+    handler.end_headers = lambda: None
+
+    handler.do_POST()
+
+    assert responses == [400]
+    assert ("Content-Type", "application/json; charset=utf-8") in headers
+    assert json.loads(handler.wfile.getvalue().decode("utf-8")) == {
+        "error": "Select at least one provider to export."
+    }
 
 
 def test_create_html_server_moves_to_next_port_when_port_is_in_use(monkeypatch):

@@ -922,10 +922,53 @@ def render_html_document(payload: dict[str, Any]) -> str:
       }}
       .page-header {{
         margin-bottom: 24px;
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+      }}
+      .page-actions {{
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 10px;
       }}
       .range {{
         color: var(--muted);
         font-size: 13px;
+      }}
+      .toolbar {{
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }}
+      .toolbar-button {{
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 16px;
+        background: var(--text);
+        color: var(--bg);
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+      }}
+      .toolbar-button[disabled] {{
+        opacity: 0.45;
+        cursor: not-allowed;
+      }}
+      .toolbar-hint {{
+        color: var(--muted);
+        font-size: 13px;
+        text-align: right;
+        min-height: 20px;
+      }}
+      .toolbar-hint.is-error {{
+        color: #dc2626;
+      }}
+      body.is-sorting-providers {{
+        user-select: none;
       }}
       .provider {{
         background: var(--surface);
@@ -933,6 +976,77 @@ def render_html_document(payload: dict[str, Any]) -> str:
         padding: 20px 16px 20px;
         margin-bottom: 24px;
         border: 1px solid rgba(127,127,127,0.12);
+        transition: opacity 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 160ms ease;
+        will-change: transform;
+      }}
+      .provider[data-export-selected="false"] {{
+        opacity: 0.72;
+      }}
+      .provider.is-pointer-dragging {{
+        position: fixed;
+        z-index: 40;
+        margin: 0;
+        opacity: 0.98;
+        pointer-events: none;
+        box-shadow: 0 28px 80px rgba(15,23,42,0.18);
+        transform: scale(1.01);
+        transform-origin: center top;
+      }}
+      .provider-placeholder {{
+        height: 0;
+        margin-bottom: 24px;
+        border-radius: 18px;
+        border: 1px dashed rgba(127,127,127,0.2);
+        background: rgba(127,127,127,0.04);
+      }}
+      .provider-topline {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+        flex-wrap: wrap;
+      }}
+      .provider-badge {{
+        color: var(--muted);
+        text-transform: uppercase;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+      }}
+      .provider-controls {{
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }}
+      .provider-toggle {{
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+      }}
+      .provider-toggle input {{
+        margin: 0;
+      }}
+      .drag-handle {{
+        border: 1px solid rgba(127,127,127,0.22);
+        border-radius: 999px;
+        padding: 8px 12px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        cursor: grab;
+        touch-action: none;
+        user-select: none;
+      }}
+      .drag-handle:active {{
+        cursor: grabbing;
       }}
       .provider-header {{
         display: grid;
@@ -940,6 +1054,9 @@ def render_html_document(payload: dict[str, Any]) -> str:
         column-gap: calc(24px * var(--layout-scale, 1));
         align-items: flex-start;
         margin-bottom: calc(16px * var(--layout-scale, 1));
+      }}
+      .provider-header.is-aggregate {{
+        grid-template-columns: minmax(0, 1.42fr) repeat(3, minmax(0, 0.74fr));
       }}
       .provider-shell-wrap {{
         overflow-x: auto;
@@ -956,6 +1073,12 @@ def render_html_document(payload: dict[str, Any]) -> str:
         font-size: var(--provider-title-font, 22px);
         font-weight: 700;
         line-height: 1.2;
+      }}
+      .provider-title.is-aggregate-title {{
+        font-size: var(--aggregate-title-font, 16px);
+        line-height: 1.08;
+        letter-spacing: -0.02em;
+        white-space: nowrap;
       }}
       .provider-caption {{
         color: var(--muted);
@@ -1101,8 +1224,16 @@ def render_html_document(payload: dict[str, Any]) -> str:
   <body>
     <div class="page">
       <div class="page-header">
-        <h1 style="margin:0 0 4px;font-size:26px;">slopmeter</h1>
-        <div class="range" id="range"></div>
+        <div>
+          <h1 style="margin:0 0 4px;font-size:26px;">slopmeter</h1>
+          <div class="range" id="range"></div>
+        </div>
+        <div class="page-actions">
+          <div class="toolbar" id="toolbar">
+            <button id="export-button" class="toolbar-button" type="button">Export PNG</button>
+          </div>
+          <div id="toolbar-hint" class="toolbar-hint"></div>
+        </div>
       </div>
       <div id="providers"></div>
     </div>
@@ -1111,7 +1242,18 @@ def render_html_document(payload: dict[str, Any]) -> str:
       const payload = {embedded};
       const providersRoot = document.getElementById("providers");
       const tooltip = document.getElementById("tooltip");
+      const toolbar = document.getElementById("toolbar");
+      const toolbarHint = document.getElementById("toolbar-hint");
+      const exportButton = document.getElementById("export-button");
       const emptyCellColor = getComputedStyle(document.documentElement).getPropertyValue("--empty").trim();
+      const ui = payload.ui || {{}};
+      const exportConfig = ui.export || null;
+      const storageKey = ui.storageKey || "slopmeter.provider-state";
+      const providerMap = new Map((payload.providers || []).map((provider) => [provider.id, provider]));
+      const defaultOrder = (payload.providers || []).map((provider) => provider.id);
+      const state = createInitialState();
+      let dragState = null;
+      let toolbarStatus = null;
       document.getElementById("range").textContent = `${{payload.start}} to ${{payload.end}}`;
       const BASE_CELL_SIZE = {BASE_CELL_SIZE};
       const BASE_GAP = {BASE_GAP};
@@ -1210,6 +1352,11 @@ def render_html_document(payload: dict[str, Any]) -> str:
         return `${{weekday}} ${{month}} ${{day}} ${{parsed.getUTCFullYear()}}`;
       }}
 
+      function formatShortMonthDay(value) {{
+        const parsed = parseDateKey(value);
+        return `${{MONTH_NAMES[parsed.getUTCMonth()]}} ${{parsed.getUTCDate()}}`;
+      }}
+
       function getAllDays(start, end) {{
         const days = [];
         const current = parseDateKey(start);
@@ -1279,9 +1426,370 @@ def render_html_document(payload: dict[str, Any]) -> str:
         tooltip.style.top = `${{Math.min(window.innerHeight - tooltip.offsetHeight - 16, event.clientY + offset)}}px`;
       }}
 
+      function readStoredState() {{
+        try {{
+          const raw = window.localStorage.getItem(storageKey);
+          return raw ? JSON.parse(raw) : null;
+        }} catch (_error) {{
+          return null;
+        }}
+      }}
+
+      function createInitialState() {{
+        const stored = readStoredState() || {{}};
+        const savedOrder = Array.isArray(stored.order)
+          ? stored.order.filter((providerId) => providerMap.has(providerId))
+          : [];
+        const order = [...savedOrder, ...defaultOrder.filter((providerId) => !savedOrder.includes(providerId))];
+        const selectedIds = Array.isArray(stored.selected)
+          ? stored.selected.filter((providerId) => providerMap.has(providerId))
+          : [...defaultOrder];
+        return {{
+          order,
+          selected: new Set(selectedIds),
+        }};
+      }}
+
+      function saveState() {{
+        try {{
+          window.localStorage.setItem(
+            storageKey,
+            JSON.stringify({{
+              order: state.order,
+              selected: state.order.filter((providerId) => state.selected.has(providerId)),
+            }})
+          );
+        }} catch (_error) {{
+          return;
+        }}
+      }}
+
+      function getSelectedProviderIds() {{
+        return state.order.filter((providerId) => state.selected.has(providerId));
+      }}
+
+      function getDefaultToolbarMessage() {{
+        const selectedCount = getSelectedProviderIds().length;
+        if (!state.order.length) return "No provider cards are available.";
+        if (exportConfig) {{
+          return `${{selectedCount}} of ${{state.order.length}} providers selected. Drag cards to reorder, then export PNG.`;
+        }}
+        return "Drag cards to reorder.";
+      }}
+
+      function updateToolbarStatus(message = null, isError = false) {{
+        toolbarStatus = message ? {{ message, isError }} : null;
+        const resolved = toolbarStatus ? toolbarStatus.message : getDefaultToolbarMessage();
+        toolbarHint.textContent = resolved;
+        toolbarHint.classList.toggle("is-error", toolbarStatus ? toolbarStatus.isError : false);
+        if (exportButton) {{
+          exportButton.hidden = !exportConfig;
+          exportButton.disabled = !exportConfig || getSelectedProviderIds().length === 0;
+        }}
+        if (toolbar) {{
+          toolbar.hidden = !exportConfig;
+        }}
+      }}
+
+      function getRenderedProviderCards() {{
+        return [...providersRoot.children].filter((element) => element.classList?.contains("provider"));
+      }}
+
+      function getRenderedProviderOrder() {{
+        return getRenderedProviderCards()
+          .map((element) => element.dataset.providerId)
+          .filter(Boolean);
+      }}
+
+      function captureProviderPositions() {{
+        const positions = new Map();
+        getRenderedProviderCards().forEach((element) => {{
+          positions.set(element.dataset.providerId, element.getBoundingClientRect());
+        }});
+        return positions;
+      }}
+
+      function animateProviderReflow(beforePositions) {{
+        getRenderedProviderCards().forEach((element) => {{
+          const before = beforePositions.get(element.dataset.providerId);
+          if (!before) return;
+          const after = element.getBoundingClientRect();
+          const deltaX = before.left - after.left;
+          const deltaY = before.top - after.top;
+          if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) return;
+
+          element.style.transition = "none";
+          element.style.transform = `translate(${{deltaX}}px, ${{deltaY}}px)`;
+          requestAnimationFrame(() => {{
+            element.style.transition = "transform 160ms ease";
+            element.style.transform = "";
+            window.setTimeout(() => {{
+              if (element.style.transform === "") {{
+                element.style.transition = "";
+              }}
+            }}, 180);
+          }});
+        }});
+      }}
+
+      function removeDragListeners() {{
+        window.removeEventListener("pointermove", handleProviderDragMove);
+        window.removeEventListener("pointerup", handleProviderDragEnd);
+        window.removeEventListener("pointercancel", handleProviderDragCancel);
+        window.removeEventListener("resize", handleProviderDragCancel);
+      }}
+
+      function clearDraggedSectionStyles(section) {{
+        section.classList.remove("is-pointer-dragging");
+        section.style.left = "";
+        section.style.top = "";
+        section.style.width = "";
+        section.style.height = "";
+      }}
+
+      function createProviderPlaceholder(section) {{
+        const placeholder = document.createElement("div");
+        placeholder.className = "provider-placeholder";
+        placeholder.style.height = `${{section.getBoundingClientRect().height}}px`;
+        return placeholder;
+      }}
+
+      function positionDraggedSection(clientY) {{
+        if (!dragState) return;
+        dragState.section.style.left = `${{dragState.left}}px`;
+        dragState.section.style.top = `${{clientY - dragState.pointerOffsetY}}px`;
+      }}
+
+      function movePlaceholderToPointer(clientY) {{
+        if (!dragState) return;
+
+        const draggedTop = clientY - dragState.pointerOffsetY;
+        const draggedCenterY = draggedTop + (dragState.height / 2);
+        const cards = getRenderedProviderCards().filter(
+          (element) => element.dataset.providerId !== dragState.providerId
+        );
+
+        let targetElement = null;
+        for (const element of cards) {{
+          const rect = element.getBoundingClientRect();
+          if (draggedCenterY < rect.top + (rect.height / 2)) {{
+            targetElement = element;
+            break;
+          }}
+        }}
+
+        const placeholder = dragState.placeholder;
+        const alreadyInPlace = targetElement
+          ? placeholder.nextElementSibling === targetElement
+          : placeholder === providersRoot.lastElementChild;
+        if (alreadyInPlace) return;
+
+        const beforePositions = captureProviderPositions();
+        if (targetElement) {{
+          providersRoot.insertBefore(placeholder, targetElement);
+        }} else {{
+          providersRoot.appendChild(placeholder);
+        }}
+        animateProviderReflow(beforePositions);
+      }}
+
+      function commitProviderDrag() {{
+        if (!dragState) return;
+        const activeState = dragState;
+        dragState = null;
+        removeDragListeners();
+        document.body.classList.remove("is-sorting-providers");
+        hideTooltip();
+
+        if (activeState.handle?.releasePointerCapture) {{
+          try {{
+            activeState.handle.releasePointerCapture(activeState.pointerId);
+          }} catch (_error) {{
+            // Pointer capture can already be released by the browser.
+          }}
+        }}
+
+        providersRoot.insertBefore(activeState.section, activeState.placeholder);
+        clearDraggedSectionStyles(activeState.section);
+        activeState.placeholder.remove();
+        state.order = getRenderedProviderOrder();
+        saveState();
+        updateToolbarStatus();
+      }}
+
+      function cancelProviderDrag() {{
+        if (!dragState) return;
+        const activeState = dragState;
+        dragState = null;
+        removeDragListeners();
+        document.body.classList.remove("is-sorting-providers");
+        hideTooltip();
+
+        if (activeState.handle?.releasePointerCapture) {{
+          try {{
+            activeState.handle.releasePointerCapture(activeState.pointerId);
+          }} catch (_error) {{
+            // Pointer capture can already be released by the browser.
+          }}
+        }}
+
+        activeState.section.remove();
+        activeState.placeholder.remove();
+        state.order = activeState.originalOrder.slice();
+        renderProviders();
+      }}
+
+      function handleProviderDragMove(event) {{
+        if (!dragState || event.pointerId !== dragState.pointerId) return;
+        event.preventDefault();
+        positionDraggedSection(event.clientY);
+        movePlaceholderToPointer(event.clientY);
+      }}
+
+      function handleProviderDragEnd(event) {{
+        if (!dragState || event.pointerId !== dragState.pointerId) return;
+        commitProviderDrag();
+      }}
+
+      function handleProviderDragCancel(event) {{
+        if (!dragState) return;
+        if (event?.type !== "resize" && event?.pointerId !== dragState.pointerId) return;
+        cancelProviderDrag();
+      }}
+
+      function startProviderDrag(event, providerId, section) {{
+        if (dragState) return;
+        if (event.pointerType === "mouse" && event.button !== 0) return;
+
+        event.preventDefault();
+        hideTooltip();
+
+        const rect = section.getBoundingClientRect();
+        const placeholder = createProviderPlaceholder(section);
+        providersRoot.insertBefore(placeholder, section);
+        document.body.appendChild(section);
+
+        section.classList.add("is-pointer-dragging");
+        section.style.width = `${{rect.width}}px`;
+        section.style.height = `${{rect.height}}px`;
+        section.style.left = `${{rect.left}}px`;
+        section.style.top = `${{rect.top}}px`;
+
+        dragState = {{
+          pointerId: event.pointerId,
+          providerId,
+          section,
+          placeholder,
+          handle: event.currentTarget,
+          left: rect.left,
+          height: rect.height,
+          pointerOffsetY: event.clientY - rect.top,
+          originalOrder: state.order.slice(),
+        }};
+
+        document.body.classList.add("is-sorting-providers");
+
+        if (event.currentTarget?.setPointerCapture) {{
+          try {{
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }} catch (_error) {{
+            // Pointer capture is optional on some platforms.
+          }}
+        }}
+
+        window.addEventListener("pointermove", handleProviderDragMove, {{ passive: false }});
+        window.addEventListener("pointerup", handleProviderDragEnd);
+        window.addEventListener("pointercancel", handleProviderDragCancel);
+        window.addEventListener("resize", handleProviderDragCancel);
+      }}
+
+      function applyProviderSelectionState(providerId) {{
+        const section = providersRoot.querySelector(`[data-provider-id="${{providerId}}"]`);
+        if (!section) return;
+        section.dataset.exportSelected = state.selected.has(providerId) ? "true" : "false";
+      }}
+
+      function toggleProviderSelection(providerId, isSelected) {{
+        if (isSelected) {{
+          state.selected.add(providerId);
+        }} else {{
+          state.selected.delete(providerId);
+        }}
+        saveState();
+        applyProviderSelectionState(providerId);
+        hideTooltip();
+        updateToolbarStatus();
+      }}
+
+      async function exportSelection() {{
+        if (!exportConfig) return;
+        const providerIds = getSelectedProviderIds();
+        if (!providerIds.length) {{
+          updateToolbarStatus("Select at least one provider to export.", true);
+          return;
+        }}
+
+        exportButton.disabled = true;
+        updateToolbarStatus("Exporting PNG...");
+
+        try {{
+          const response = await fetch(exportConfig.endpoint, {{
+            method: "POST",
+            headers: {{
+              "Content-Type": "application/json",
+            }},
+            body: JSON.stringify({{ providerIds }}),
+          }});
+
+          if (!response.ok) {{
+            let errorMessage = `Export failed (${{response.status}})`;
+            try {{
+              const errorPayload = await response.json();
+              if (errorPayload && typeof errorPayload.error === "string" && errorPayload.error) {{
+                errorMessage = errorPayload.error;
+              }}
+            }} catch (_error) {{
+              // Keep the fallback message when the error body is not JSON.
+            }}
+            throw new Error(errorMessage);
+          }}
+
+          const blob = await response.blob();
+          const filename = getFilenameFromHeader(response.headers.get("Content-Disposition"))
+            || `slopmeter_${{providerIds.join("_")}}.png`;
+          downloadBlob(blob, filename);
+          updateToolbarStatus(`Exported ${{providerIds.length}} provider${{providerIds.length === 1 ? "" : "s"}} to ${{filename}}.`);
+        }} catch (error) {{
+          updateToolbarStatus(error instanceof Error ? error.message : "Export failed.", true);
+        }} finally {{
+          if (exportButton) {{
+            exportButton.disabled = !exportConfig || getSelectedProviderIds().length === 0;
+          }}
+        }}
+      }}
+
+      function getFilenameFromHeader(value) {{
+        if (!value) return null;
+        const match = value.match(/filename="?([^"]+)"?/i);
+        return match ? match[1] : null;
+      }}
+
+      function downloadBlob(blob, filename) {{
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+      }}
+
       function renderProvider(provider) {{
         const section = document.createElement("section");
         section.className = "provider";
+        section.dataset.providerId = provider.id;
+        section.dataset.exportSelected = state.selected.has(provider.id) ? "true" : "false";
 
         const allDays = getAllDays(payload.start, payload.end);
         const paddedDays = padToWeekStartMonday(allDays);
@@ -1313,6 +1821,37 @@ def render_html_document(payload: dict[str, Any]) -> str:
           totalTokens += row.total;
         }}
 
+        const topLine = document.createElement("div");
+        topLine.className = "provider-topline";
+
+        const badge = document.createElement("div");
+        badge.className = "provider-badge";
+        badge.textContent = provider.id === "all" ? "Aggregate" : "Provider";
+        topLine.appendChild(badge);
+
+        const controls = document.createElement("div");
+        controls.className = "provider-controls";
+
+        const toggle = document.createElement("label");
+        toggle.className = "provider-toggle";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = state.selected.has(provider.id);
+        checkbox.addEventListener("change", () => toggleProviderSelection(provider.id, checkbox.checked));
+        toggle.appendChild(checkbox);
+        toggle.appendChild(document.createTextNode("Include in export"));
+        controls.appendChild(toggle);
+
+        const dragHandle = document.createElement("div");
+        dragHandle.className = "drag-handle";
+        dragHandle.textContent = "Drag";
+        dragHandle.title = "Drag to reorder";
+        dragHandle.addEventListener("pointerdown", (event) => startProviderDrag(event, provider.id, section));
+        controls.appendChild(dragHandle);
+
+        topLine.appendChild(controls);
+        section.appendChild(topLine);
+
         const shellWrap = document.createElement("div");
         shellWrap.className = "provider-shell-wrap";
         const shell = document.createElement("div");
@@ -1324,6 +1863,10 @@ def render_html_document(payload: dict[str, Any]) -> str:
         shell.style.setProperty("--cell-size", `${{layout.cellSize}}px`);
         shell.style.setProperty("--cell-gap", `${{layout.gap}}px`);
         shell.style.setProperty("--provider-title-font", `${{layout.providerTitleFont}}px`);
+        shell.style.setProperty(
+          "--aggregate-title-font",
+          `${{Math.max(layout.metricValueFont, Math.round(layout.providerTitleFont * 0.74))}}px`
+        );
         shell.style.setProperty("--metric-label-font", `${{layout.metricLabelFont}}px`);
         shell.style.setProperty("--metric-value-font", `${{layout.metricValueFont}}px`);
         shell.style.setProperty("--small-font", `${{layout.smallFont}}px`);
@@ -1331,10 +1874,13 @@ def render_html_document(payload: dict[str, Any]) -> str:
 
         const header = document.createElement("div");
         header.className = "provider-header";
+        if (provider.id === "all") {{
+          header.classList.add("is-aggregate");
+        }}
         header.innerHTML = `
           <div class="provider-heading">
             <div class="provider-caption">${{provider.id === "all" ? "Total usage from" : "Provider"}}</div>
-            <div class="provider-title">${{provider.title}}</div>
+            <div class="provider-title${{provider.id === "all" ? " is-aggregate-title" : ""}}">${{provider.title}}</div>
           </div>
           <div class="metrics">
             <div class="metric"><div class="metric-label">Input tokens</div><div class="metric-value">${{formatTokenTotal(totalInput)}}</div></div>
@@ -1419,7 +1965,7 @@ def render_html_document(payload: dict[str, Any]) -> str:
         if (firstActivityOnlyDate && firstMeasuredDate) {{
           const note = document.createElement("div");
           note.className = "note";
-          note.textContent = `Claude started logging full token telemetry on ${{new Date(`${{firstMeasuredDate}}T00:00:00`).toLocaleString("en-US", {{ month: "short", day: "numeric" }})}}; earlier activity may be undercounted.`;
+          note.textContent = `Claude started logging full token telemetry on ${{formatShortMonthDay(firstMeasuredDate)}}; earlier activity may be undercounted.`;
           shell.appendChild(note);
         }}
 
@@ -1443,7 +1989,20 @@ def render_html_document(payload: dict[str, Any]) -> str:
         providersRoot.appendChild(section);
       }}
 
-      payload.providers.forEach(renderProvider);
+      function renderProviders() {{
+        providersRoot.innerHTML = "";
+        state.order.forEach((providerId) => {{
+          const provider = providerMap.get(providerId);
+          if (provider) renderProvider(provider);
+        }});
+        updateToolbarStatus();
+      }}
+
+      if (exportButton) {{
+        exportButton.addEventListener("click", exportSelection);
+      }}
+
+      renderProviders();
     </script>
   </body>
 </html>

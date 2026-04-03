@@ -1,8 +1,10 @@
 # slopmeter
 
-[English](./README.md) | [简体中文](./README.zh-CN.md)
+![Example heatmap](./images/slopmeter_all.png)
 
-英文主文档请见 [README.md](./README.md)。
+<p align="center">
+  <a href="./README.md">English</a> | <a href="./README.zh-CN.md">简体中文</a>
+</p>
 
 这是一个用于展示 AI 编码工具使用热力图，并提供本地网页查看器的工具。
 
@@ -54,9 +56,11 @@ slopmeter
 
 ```bash
 slopmeter --codex --dark
+slopmeter --provider all,claude,codex
 slopmeter serve --host 127.0.0.1 --port 9000
 slopmeter export --format html --output ./out/heatmap.html
 slopmeter export --codex --format json --output ./out/codex.json
+slopmeter export --provider all,opencode,codex --format png --output ./out/custom.png
 slopmeter export --all --dark --format png --output ./out/all.png
 ```
 
@@ -74,16 +78,32 @@ slopmeter export --all --dark --format png --output ./out/all.png
 - 程序会在启动时扫描一次 provider 数据
 - 在内存里生成一份 HTML 快照
 - 通过 HTTP 服务把这份快照提供给浏览器
+- 默认先显示 `all` 聚合卡片，再显示所有有数据的单渠道卡片
+- 页面里的渠道卡片可以拖拽排序
+- 当前页面顺序和导出勾选状态会保存在本机浏览器的 localStorage
+- 页面可以把当前勾选的卡片按当前顺序导出成一张 PNG
 - 默认不会把 HTML 保存到本地文件，除非你显式使用 `slopmeter export --format html`
 
-无论是 `slopmeter` 还是 `slopmeter export`，都可以使用 provider 过滤参数：
+无论是 `slopmeter` 还是 `slopmeter export`，都可以使用有序的 provider 选择参数：
+
+```bash
+slopmeter --provider all,claude,codex
+slopmeter export --provider all,opencode,codex --format png --output ./out/custom.png
+```
+
+旧的 provider 布尔参数仍然可用：
 
 ```bash
 slopmeter --claude
 slopmeter --codex
-slopmeter --all
 slopmeter export --cursor --format svg --output ./out/cursor.svg
 ```
+
+## 选择规则
+
+- `all` 永远表示“当前检测到且有数据的所有渠道总和”，不是“同一条命令里其他显式写出来的渠道之和”。
+- 如果 `--provider` 里同时包含存在和不存在的渠道，不存在的渠道会被直接跳过；只有当你选的渠道一个都没有可用数据时，命令才会失败。
+- 在网页里，排序只能从 `Drag` 手柄开始；`Export PNG` 导出的内容始终以当前页面顺序和当前勾选状态为准。
 
 ## 参数说明
 
@@ -108,9 +128,19 @@ slopmeter export --cursor --format svg --output ./out/cursor.svg
   使用深色主题渲染网页。
   示例：`slopmeter --dark`
 
+- `--provider`, `-p`
+  按顺序加入一个 provider，或者一次传入一个 provider 列表。
+  你可以传单个值，例如 `--provider codex`，也可以传逗号分隔的列表，例如 `--provider all,claude,codex`。
+  这个参数仍然可以重复传，多次出现时会按顺序继续追加。
+  支持的值：`all`、`amp`、`claude`、`codex`、`cursor`、`gemini`、`opencode`、`pi`
+  只要传了任意 `--provider`，它就会优先于旧的 `--all` 和各个单独 provider 布尔参数。
+  示例：`slopmeter --provider all,claude,codex`
+
 - `--all`
+  兼容旧行为的参数。
   把所有检测到的 provider 合并成一张总热力图。
-  如果设置了 `--all`，单独的 provider 参数在渲染时会被忽略。
+  如果你想让 `all` 和其他渠道一起出现并参与排序，请使用 `--provider all`。
+  这里的 `all` 永远表示“所有已检测到且有数据的渠道总和”，不是“同一条命令里其他显式写出来的渠道之和”。
   示例：`slopmeter --all`
 
 - `--amp`
@@ -141,12 +171,14 @@ slopmeter export --cursor --format svg --output ./out/cursor.svg
   只展示 Pi Coding Agent 使用数据。
   示例：`slopmeter --pi`
 
-如果你没有传任何 provider 参数，`slopmeter` 会优先按下面的顺序选择可用 provider：
+如果你没有传任何 provider 选择参数，`slopmeter` 会按下面的顺序显示所有有数据的卡片：
 
-1. `Claude Code`
-2. `Codex`
-3. `Cursor`
-4. 如果这些没有数据，再依次尝试其他 provider
+1. `all`
+2. `Claude Code`
+3. `Codex`
+4. `Open Code`
+5. `Cursor`
+6. 再接其他有数据的 provider
 
 ### `slopmeter export`
 
@@ -167,8 +199,18 @@ slopmeter export --cursor --format svg --output ./out/cursor.svg
   使用深色主题导出。
   示例：`slopmeter export --dark --format png --output ./out/dark.png`
 
+- `--provider`, `-p`
+  按顺序加入一个 provider，或者一次传入一个 provider 列表。
+  你可以传单个值，例如 `--provider codex`，也可以传逗号分隔的列表，例如 `--provider all,opencode,codex`。
+  这个参数仍然可以重复传，多次出现时会按顺序继续追加。
+  支持的值：`all`、`amp`、`claude`、`codex`、`cursor`、`gemini`、`opencode`、`pi`
+  示例：`slopmeter export --provider all,opencode,codex --format png --output ./out/custom.png`
+
 - `--all`
+  兼容旧行为的参数。
   把所有检测到的 provider 合并成一个导出结果。
+  如果你想让 `all` 和其他渠道一起导出，请使用 `--provider all`。
+  这里的 `all` 永远表示“所有已检测到且有数据的渠道总和”，不是“同一条命令里其他显式写出来的渠道之和”。
   示例：`slopmeter export --all --format html --output ./out/all.html`
 
 - `--amp`
@@ -197,6 +239,7 @@ slopmeter export --cursor --format svg --output ./out/cursor.svg
 ```bash
 slopmeter export --codex --format json --output ./out/codex.json
 slopmeter export --cursor --format svg --output ./out/cursor.svg
+slopmeter export --provider all,opencode,codex --format png --output ./out/custom.png
 slopmeter export --all --dark --format png --output ./out/all.png
 slopmeter export --claude --format html --output ./out/claude.html
 ```
@@ -217,3 +260,7 @@ slopmeter --help
 slopmeter serve --help
 slopmeter export --help
 ```
+
+## 参考
+
+本项目来自 [JeanMeijer/slopmeter](https://github.com/JeanMeijer/slopmeter) 的 Python 版本，感谢原作者的创意和实现。

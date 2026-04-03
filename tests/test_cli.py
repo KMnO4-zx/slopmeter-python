@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
-from slopmeter.cli import app, build_cli_values, run_serve
+from slopmeter.cli import analyze_usage, app, build_cli_values, run_serve
 from slopmeter.models import CacheTokens, DailyUsage
 from slopmeter.providers.cursor import summarize_cursor_usage_csv_text
 from slopmeter.render import (
@@ -187,11 +187,14 @@ def test_run_serve_prints_final_url(monkeypatch, capsys):
         def server_close(self) -> None:
             return
 
-    monkeypatch.setattr("slopmeter.cli.analyze_usage", lambda values: SimpleNamespace(payload={"providers": []}))
+    monkeypatch.setattr(
+        "slopmeter.cli.analyze_usage",
+        lambda values, *, selection_mode: SimpleNamespace(payload={"providers": []}),
+    )
     monkeypatch.setattr("slopmeter.cli.render_html_document", lambda payload: "<html>ok</html>")
     monkeypatch.setattr(
         "slopmeter.cli.create_html_server",
-        lambda document, *, host, port, strict_port: (DummyServer(), "http://127.0.0.1:8000"),
+        lambda document, *, host, port, strict_port, export_png: (DummyServer(), "http://127.0.0.1:8000"),
     )
 
     run_serve(build_cli_values(), host="127.0.0.1", port=8000, strict_port=False)
@@ -199,6 +202,41 @@ def test_run_serve_prints_final_url(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "Serving slopmeter at http://127.0.0.1:8000" in captured.out
     assert "Stopping slopmeter" in captured.out
+
+
+def test_service_default_payload_includes_all_then_available_providers(monkeypatch, tmp_path: Path):
+    codex_home = tmp_path / "codex"
+    open_code_dir = tmp_path / "opencode"
+    env = base_env(
+        tmp_path,
+        CODEX_HOME=str(codex_home),
+        OPENCODE_DATA_DIR=str(open_code_dir),
+    )
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    write_jsonl_file(
+        codex_home / "sessions" / "session.jsonl",
+        [
+            codex_turn_context("gpt-5"),
+            codex_token_count(input=12, output=8, total=20),
+        ],
+    )
+    write_json_file(
+        open_code_dir / "storage" / "message" / "one.json",
+        open_code_message(id="msg-1", input=8, output=5, cacheRead=2),
+    )
+
+    bundle = analyze_usage(
+        build_cli_values(),
+        selection_mode="serve",
+    )
+
+    assert [provider["provider"] for provider in bundle.payload["providers"]] == [
+        "all",
+        "codex",
+        "opencode",
+    ]
 
 
 def test_codex_json_export_from_cumulative_totals(tmp_path: Path):
@@ -293,6 +331,236 @@ def test_opencode_reads_legacy_file_backed_message_layout(tmp_path: Path):
     assert payload["providers"][0]["daily"][0]["total"] == 15
 
 
+def test_export_respects_explicit_provider_order_with_all(tmp_path: Path):
+    codex_home = tmp_path / "codex"
+    open_code_dir = tmp_path / "opencode"
+    output_path = tmp_path / "ordered.json"
+
+    write_jsonl_file(
+        codex_home / "sessions" / "session.jsonl",
+        [
+            codex_turn_context("gpt-5"),
+            codex_token_count(input=12, output=8, total=20),
+        ],
+    )
+    write_json_file(
+        open_code_dir / "storage" / "message" / "one.json",
+        open_code_message(id="msg-1", input=8, output=5, cacheRead=2),
+    )
+
+    result = invoke(
+        [
+            "export",
+            "--provider",
+            "all",
+            "--provider",
+            "opencode",
+            "--provider",
+            "codex",
+            "--format",
+            "json",
+            "--output",
+            str(output_path),
+        ],
+        base_env(
+            tmp_path,
+            CODEX_HOME=str(codex_home),
+            OPENCODE_DATA_DIR=str(open_code_dir),
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert [provider["provider"] for provider in payload["providers"]] == [
+        "all",
+        "opencode",
+        "codex",
+    ]
+    assert payload["providers"][0]["daily"][0]["total"] == 35
+    assert payload["providers"][1]["daily"][0]["total"] == 15
+    assert payload["providers"][2]["daily"][0]["total"] == 20
+
+
+def test_all_provider_aggregates_all_available_channels_not_only_requested_ones(tmp_path: Path):
+    codex_home = tmp_path / "codex"
+    open_code_dir = tmp_path / "opencode"
+    output_path = tmp_path / "all-total.json"
+
+    write_jsonl_file(
+        codex_home / "sessions" / "session.jsonl",
+        [
+            codex_turn_context("gpt-5"),
+            codex_token_count(input=12, output=8, total=20),
+        ],
+    )
+    write_json_file(
+        open_code_dir / "storage" / "message" / "one.json",
+        open_code_message(id="msg-1", input=8, output=5, cacheRead=2),
+    )
+
+    result = invoke(
+        [
+            "export",
+            "--provider",
+            "all,codex",
+            "--format",
+            "json",
+            "--output",
+            str(output_path),
+        ],
+        base_env(
+            tmp_path,
+            CODEX_HOME=str(codex_home),
+            OPENCODE_DATA_DIR=str(open_code_dir),
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert [provider["provider"] for provider in payload["providers"]] == ["all", "codex"]
+    assert payload["providers"][0]["daily"][0]["total"] == 35
+    assert payload["providers"][1]["daily"][0]["total"] == 20
+
+
+def test_export_accepts_comma_separated_provider_list(tmp_path: Path):
+    codex_home = tmp_path / "codex"
+    open_code_dir = tmp_path / "opencode"
+    output_path = tmp_path / "comma-list.json"
+
+    write_jsonl_file(
+        codex_home / "sessions" / "session.jsonl",
+        [
+            codex_turn_context("gpt-5"),
+            codex_token_count(input=12, output=8, total=20),
+        ],
+    )
+    write_json_file(
+        open_code_dir / "storage" / "message" / "one.json",
+        open_code_message(id="msg-1", input=8, output=5, cacheRead=2),
+    )
+
+    result = invoke(
+        [
+            "export",
+            "--provider",
+            "all,opencode,codex",
+            "--format",
+            "json",
+            "--output",
+            str(output_path),
+        ],
+        base_env(
+            tmp_path,
+            CODEX_HOME=str(codex_home),
+            OPENCODE_DATA_DIR=str(open_code_dir),
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert [provider["provider"] for provider in payload["providers"]] == [
+        "all",
+        "opencode",
+        "codex",
+    ]
+
+
+def test_export_skips_missing_requested_providers_when_others_exist(tmp_path: Path):
+    codex_home = tmp_path / "codex"
+    output_path = tmp_path / "skip-missing.json"
+
+    write_jsonl_file(
+        codex_home / "sessions" / "session.jsonl",
+        [
+            codex_turn_context("gpt-5"),
+            codex_token_count(input=12, output=8, total=20),
+        ],
+    )
+
+    result = invoke(
+        [
+            "export",
+            "--provider",
+            "all,opencode,codex",
+            "--format",
+            "json",
+            "--output",
+            str(output_path),
+        ],
+        base_env(
+            tmp_path,
+            CODEX_HOME=str(codex_home),
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert [provider["provider"] for provider in payload["providers"]] == [
+        "all",
+        "codex",
+    ]
+
+
+def test_export_fails_when_all_requested_providers_are_missing(tmp_path: Path):
+    output_path = tmp_path / "missing.json"
+
+    result = invoke(
+        [
+            "export",
+            "--provider",
+            "opencode",
+            "--format",
+            "json",
+            "--output",
+            str(output_path),
+        ],
+        base_env(tmp_path),
+    )
+
+    assert result.exit_code == 1
+    assert "No usage data found for selected providers: Open Code" in result.output
+
+
+def test_explicit_provider_order_overrides_legacy_provider_flags(tmp_path: Path):
+    codex_home = tmp_path / "codex"
+    open_code_dir = tmp_path / "opencode"
+    output_path = tmp_path / "override.json"
+
+    write_jsonl_file(
+        codex_home / "sessions" / "session.jsonl",
+        [
+            codex_turn_context("gpt-5"),
+            codex_token_count(input=12, output=8, total=20),
+        ],
+    )
+    write_json_file(
+        open_code_dir / "storage" / "message" / "one.json",
+        open_code_message(id="msg-1", input=8, output=5, cacheRead=2),
+    )
+
+    result = invoke(
+        [
+            "export",
+            "--codex",
+            "--provider",
+            "opencode",
+            "--format",
+            "json",
+            "--output",
+            str(output_path),
+        ],
+        base_env(
+            tmp_path,
+            CODEX_HOME=str(codex_home),
+            OPENCODE_DATA_DIR=str(open_code_dir),
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert [provider["provider"] for provider in payload["providers"]] == ["opencode"]
+
+
 def test_cursor_csv_summary_reconstructs_cache_split():
     csv_text = "\n".join(
         [
@@ -344,6 +612,12 @@ def test_html_svg_and_png_exports_are_generated(tmp_path: Path):
     assert "--shell-width" in html_text
     assert "function formatDateKey(value)" in html_text
     assert "current.setUTCDate(current.getUTCDate() + 1);" in html_text
+    assert 'addEventListener("pointerdown"' in html_text
+    assert "function movePlaceholderToPointer(clientY)" in html_text
+    assert "provider-placeholder" in html_text
+    assert 'setAttribute("draggable", "true")' not in html_text
+    assert 'addEventListener("dragstart"' not in html_text
+    assert 'addEventListener("drop"' not in html_text
     assert "toISOString().slice(0, 10)" not in html_text
     assert svg_path.read_text(encoding="utf-8").startswith("<svg")
     assert png_path.stat().st_size > 0

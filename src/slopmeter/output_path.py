@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from .models import ProviderId
+from .models import ProviderId, UsageProviderId
 
 OutputFormat = str
 
 
 @dataclass
 class ProviderSelectionValues:
+    providers: list[UsageProviderId] = field(default_factory=list)
     all: bool = False
     amp: bool = False
     claude: bool = False
@@ -35,6 +36,9 @@ def get_requested_providers_for_output(values: ProviderSelectionValues) -> list[
 
 
 def get_default_output_suffix(values: ProviderSelectionValues) -> str:
+    if values.providers:
+        return f"_{'_'.join(values.providers)}"
+
     if values.all:
         return "_all"
 
@@ -47,4 +51,3 @@ def get_default_output_suffix(values: ProviderSelectionValues) -> str:
 
 def get_default_output_path(values: ProviderSelectionValues, fmt: OutputFormat) -> str:
     return f"./heatmap-last-year{get_default_output_suffix(values)}.{fmt}"
-

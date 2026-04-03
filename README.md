@@ -1,8 +1,11 @@
 # slopmeter
 
-[English](./README.md) | [简体中文](./README.zh-CN.md)
+![Example heatmap](./images/slopmeter_all.png)
 
-The primary README is in English. For a Chinese version, see [README.zh-CN.md](./README.zh-CN.md).
+<p align="center">
+  <a href="./README.md">English</a> | <a href="./README.zh-CN.md">简体中文</a>
+</p>
+
 
 Local usage heatmaps and a web viewer for AI coding tools.
 
@@ -54,9 +57,11 @@ Common variants:
 
 ```bash
 slopmeter --codex --dark
+slopmeter --provider all,claude,codex
 slopmeter serve --host 127.0.0.1 --port 9000
 slopmeter export --format html --output ./out/heatmap.html
 slopmeter export --codex --format json --output ./out/codex.json
+slopmeter export --provider all,claude,codex --format png --output ./out/custom.png
 slopmeter export --all --dark --format png --output ./out/all.png
 ```
 
@@ -74,16 +79,32 @@ When you run `slopmeter` or `slopmeter serve`:
 - the app scans provider data once at startup
 - it renders one HTML snapshot in memory
 - it serves that snapshot over HTTP
+- it shows `all` first, then all available provider cards
+- provider cards can be drag-sorted in the page
+- the current page order and export selection are saved in local browser storage
+- the page can export the currently selected cards as one PNG
 - it does not save an HTML file unless you explicitly use `slopmeter export --format html`
 
-Provider filters can be used with either `slopmeter` or `slopmeter export`:
+Ordered provider selection can be used with either `slopmeter` or `slopmeter export`:
+
+```bash
+slopmeter --provider all,claude,codex
+slopmeter export --provider all,opencode,codex --format png --output ./out/custom.png
+```
+
+Legacy provider flags are still supported:
 
 ```bash
 slopmeter --claude
 slopmeter --codex
-slopmeter --all
 slopmeter export --cursor --format svg --output ./out/cursor.svg
 ```
+
+## Selection Notes
+
+- `all` always means the aggregate of every detected provider that currently has data. It does not mean “the sum of the other providers named in the same command”.
+- If you pass `--provider` with a mix of existing and missing providers, missing providers are skipped. The command fails only when none of the selected providers have usable data.
+- In the web UI, drag sorting starts from the `Drag` handle, and the current order plus checked cards are what `Export PNG` uses.
 
 ## Parameters
 
@@ -108,9 +129,19 @@ These options control the local web server.
   Render the web UI in dark mode.
   Example: `slopmeter --dark`
 
+- `--provider`, `-p`
+  Add one provider or one ordered provider list to the render/export selection.
+  You can pass a single provider such as `--provider codex`, or a comma-separated list such as `--provider all,claude,codex`.
+  Repeating `--provider` still works and appends more providers in order.
+  Supported values: `all`, `amp`, `claude`, `codex`, `cursor`, `gemini`, `opencode`, `pi`
+  If any `--provider` is passed, it takes priority over the legacy `--all` and per-provider boolean flags.
+  Example: `slopmeter --provider all,claude,codex`
+
 - `--all`
+  Legacy compatibility flag.
   Merge all detected providers into a single combined heatmap.
-  If `--all` is set, individual provider flags are ignored for rendering.
+  Use `--provider all` when you want `all` to appear alongside other providers and participate in ordering.
+  `all` always means the total across every detected provider with data, not just the other providers named in the same command.
   Example: `slopmeter --all`
 
 - `--amp`
@@ -141,12 +172,14 @@ These options control the local web server.
   Only render Pi Coding Agent usage.
   Example: `slopmeter --pi`
 
-If you do not pass any provider flag, `slopmeter` prefers the first available providers in this order:
+If you do not pass any provider selector, `slopmeter` shows all available cards in this order:
 
-1. `Claude Code`
-2. `Codex`
-3. `Cursor`
-4. then the remaining providers if those are missing
+1. `all`
+2. `Claude Code`
+3. `Codex`
+4. `Open Code`
+5. `Cursor`
+6. then the remaining available providers
 
 ### `slopmeter export`
 
@@ -167,8 +200,19 @@ These options control file export.
   Export using dark theme colors.
   Example: `slopmeter export --dark --format png --output ./out/dark.png`
 
+- `--provider`, `-p`
+  Add one provider or one ordered provider list to the export selection.
+  You can pass a single provider such as `--provider codex`, or a comma-separated list such as `--provider all,opencode,codex`.
+  Repeating `--provider` still works and appends more providers in order.
+  Supported values: `all`, `amp`, `claude`, `codex`, `cursor`, `gemini`, `opencode`, `pi`
+  Missing providers are skipped as long as at least one requested provider has data.
+  Example: `slopmeter export --provider all,opencode,codex --format png --output ./out/custom.png`
+
 - `--all`
+  Legacy compatibility flag.
   Merge all detected providers into one combined export.
+  Use `--provider all` when you want `all` to be exported together with other providers.
+  `all` always means the total across every detected provider with data, not just the other providers named in the same command.
   Example: `slopmeter export --all --format html --output ./out/all.html`
 
 - `--amp`
@@ -197,6 +241,7 @@ Examples:
 ```bash
 slopmeter export --codex --format json --output ./out/codex.json
 slopmeter export --cursor --format svg --output ./out/cursor.svg
+slopmeter export --provider all,opencode,codex --format png --output ./out/custom.png
 slopmeter export --all --dark --format png --output ./out/all.png
 slopmeter export --claude --format html --output ./out/claude.html
 ```
@@ -217,3 +262,7 @@ slopmeter --help
 slopmeter serve --help
 slopmeter export --help
 ```
+
+## Credits
+
+This project is a Python adaptation of [JeanMeijer/slopmeter](https://github.com/JeanMeijer/slopmeter). Credit to the original author for the idea and implementation.

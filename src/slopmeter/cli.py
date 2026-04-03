@@ -1,22 +1,34 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal, cast
 
 import typer
 from click.core import ParameterSource
 from rich.console import Console
 
 from .export import build_json_export, to_json_provider_summary
-from .models import ColorMode, UsageSummary
+from .models import ColorMode, ProviderId, UsageProviderId, UsageSummary
 from .output_path import ProviderSelectionValues, get_default_output_path
-from .provider_meta import DEFAULT_PROVIDER_IDS, PROVIDER_IDS, PROVIDER_STATUS_LABEL
+from .provider_meta import (
+    DEFAULT_PROVIDER_IDS,
+    ORDERABLE_PROVIDER_IDS,
+    PROVIDER_IDS,
+    PROVIDER_STATUS_LABEL,
+    SERVICE_DEFAULT_PROVIDER_IDS,
+)
 from .providers import AggregateUsageResult, aggregate_usage, get_provider_availability, merge_provider_usage
 from .render import HEATMAP_THEMES, RenderSection, render_html_document, render_usage_heatmaps_png, render_usage_heatmaps_svg
 from .server import create_html_server
 from .utils import format_local_date
+
+SelectionMode = Literal["serve", "export"]
+SERVICE_EXPORT_ENDPOINT = "/api/export"
+SERVICE_STORAGE_KEY = "slopmeter.provider-state"
 
 app = typer.Typer(
     add_completion=False,
@@ -40,8 +52,8 @@ class AnalysisBundle:
     start: datetime
     end: datetime
     color_mode: ColorMode
-    inspected_providers: list[str]
-    availability_by_provider: dict[str, bool]
+    inspected_providers: list[ProviderId]
+    availability_by_provider: dict[ProviderId, bool]
     aggregate_result: AggregateUsageResult
     export_providers: list[UsageSummary]
     payload: dict[str, object]
@@ -73,11 +85,41 @@ def get_date_window() -> tuple[datetime, datetime]:
     return start, end
 
 
+def normalize_usage_provider_ids(provider_ids: list[str] | None) -> list[UsageProviderId]:
+    normalized: list[UsageProviderId] = []
+    seen: set[UsageProviderId] = set()
+    valid = ", ".join(ORDERABLE_PROVIDER_IDS)
+
+    for raw in provider_ids or []:
+        raw_value = raw.strip()
+        if raw_value.startswith("[") and raw_value.endswith("]"):
+            raw_value = raw_value[1:-1]
+
+        candidates = [item for item in re.split(r"[\s,，]+", raw_value) if item]
+        if not candidates:
+            raise ValueError(f"Unsupported provider: {raw}. Expected one of: {valid}")
+
+        for candidate in candidates:
+            lowered = candidate.strip().lower()
+            if lowered not in ORDERABLE_PROVIDER_IDS:
+                raise ValueError(f"Unsupported provider: {candidate}. Expected one of: {valid}")
+
+            provider = cast(UsageProviderId, lowered)
+            if provider in seen:
+                raise ValueError(f"Duplicate provider requested: {PROVIDER_STATUS_LABEL[provider]}")
+
+            normalized.append(provider)
+            seen.add(provider)
+
+    return normalized
+
+
 def build_cli_values(
     *,
     output: str | None = None,
     format: str | None = None,
     dark: bool = False,
+    providers: list[str] | None = None,
     all: bool = False,
     amp: bool = False,
     claude: bool = False,
@@ -88,6 +130,7 @@ def build_cli_values(
     pi: bool = False,
 ) -> CliArgValues:
     return CliArgValues(
+        providers=normalize_usage_provider_ids(providers),
         output=output,
         format=format,
         dark=dark,
@@ -102,13 +145,13 @@ def build_cli_values(
     )
 
 
-def print_provider_availability(availability_by_provider: dict[str, bool], providers: list[str]) -> None:
+def print_provider_availability(availability_by_provider: dict[ProviderId, bool], providers: list[ProviderId]) -> None:
     for provider in providers:
         status = "available" if availability_by_provider[provider] else "not available"
         print(f"{PROVIDER_STATUS_LABEL[provider]} {status}")
 
 
-def get_requested_providers(values: ProviderSelectionValues) -> list[str]:
+def get_requested_providers(values: ProviderSelectionValues) -> list[ProviderId]:
     return [provider for provider in PROVIDER_IDS if getattr(values, provider)]
 
 
@@ -116,13 +159,18 @@ def get_merged_no_data_message() -> str:
     return "No usage data found for Amp, Claude Code, Codex, Cursor, Gemini CLI, Open Code, or Pi Coding Agent."
 
 
-def get_requested_missing_providers_message(missing: list[str]) -> str:
+def get_requested_missing_providers_message(missing: list[UsageProviderId]) -> str:
     labels = ", ".join(PROVIDER_STATUS_LABEL[provider] for provider in missing)
     return f"Requested provider data not found: {labels}"
 
 
-def get_default_output_provider_ids(rows_by_provider: dict[str, UsageSummary | None]) -> list[str]:
-    selected: list[str] = []
+def get_no_selected_provider_data_message(requested: list[UsageProviderId]) -> str:
+    labels = ", ".join(PROVIDER_STATUS_LABEL[provider] for provider in requested)
+    return f"No usage data found for selected providers: {labels}"
+
+
+def get_default_output_provider_ids(rows_by_provider: dict[ProviderId, UsageSummary | None]) -> list[ProviderId]:
+    selected: list[ProviderId] = []
     fallback_providers = [provider for provider in PROVIDER_IDS if provider not in DEFAULT_PROVIDER_IDS]
 
     for provider in [*DEFAULT_PROVIDER_IDS, *fallback_providers]:
@@ -135,7 +183,45 @@ def get_default_output_provider_ids(rows_by_provider: dict[str, UsageSummary | N
     return selected
 
 
-def get_merged_provider_title(rows_by_provider: dict[str, UsageSummary | None]) -> str:
+def filter_available_provider_ids(
+    provider_ids: list[UsageProviderId],
+    summary_lookup: dict[UsageProviderId, UsageSummary],
+) -> tuple[list[UsageProviderId], list[UsageProviderId]]:
+    available = [provider for provider in provider_ids if provider in summary_lookup]
+    missing = [provider for provider in provider_ids if provider not in summary_lookup]
+    return available, missing
+
+
+def get_available_summary_lookup(
+    rows_by_provider: dict[ProviderId, UsageSummary | None],
+    end: datetime,
+) -> dict[UsageProviderId, UsageSummary]:
+    lookup: dict[UsageProviderId, UsageSummary] = {}
+    for provider in PROVIDER_IDS:
+        summary = rows_by_provider.get(provider)
+        if summary is not None:
+            lookup[provider] = summary
+
+    merged = merge_provider_usage(rows_by_provider, end)
+    if merged is not None:
+        lookup["all"] = merged
+
+    return lookup
+
+
+def get_default_service_provider_ids(summary_lookup: dict[UsageProviderId, UsageSummary]) -> list[UsageProviderId]:
+    selected: list[UsageProviderId] = []
+    if "all" in summary_lookup:
+        selected.append("all")
+
+    for provider in SERVICE_DEFAULT_PROVIDER_IDS:
+        if provider in summary_lookup:
+            selected.append(provider)
+
+    return selected
+
+
+def get_merged_provider_title(rows_by_provider: dict[ProviderId, UsageSummary | None]) -> str:
     return " / ".join(
         HEATMAP_THEMES[provider].title
         for provider in PROVIDER_IDS
@@ -143,54 +229,108 @@ def get_merged_provider_title(rows_by_provider: dict[str, UsageSummary | None]) 
     )
 
 
-def select_providers_to_render(
-    availability_by_provider: dict[str, bool],
-    rows_by_provider: dict[str, UsageSummary | None],
-    requested: list[str],
-) -> list[UsageSummary]:
-    default_providers = get_default_output_provider_ids(rows_by_provider)
-    providers_to_render = (
-        [provider for provider in requested if rows_by_provider.get(provider)]
-        if requested
-        else [provider for provider in default_providers if rows_by_provider.get(provider)]
+def get_no_data_with_available_message(
+    availability_by_provider: dict[ProviderId, bool],
+    *,
+    selection_mode: SelectionMode,
+) -> str:
+    available_providers = [provider for provider in PROVIDER_IDS if availability_by_provider[provider]]
+    if not available_providers:
+        return get_merged_no_data_message()
+
+    available_labels = ", ".join(PROVIDER_STATUS_LABEL[provider] for provider in available_providers)
+    if selection_mode == "serve":
+        preferred_order = ["all", *SERVICE_DEFAULT_PROVIDER_IDS]
+    else:
+        preferred_order = list(DEFAULT_PROVIDER_IDS)
+    preferred_labels = ", ".join(PROVIDER_STATUS_LABEL[provider] for provider in preferred_order)
+    return (
+        "No usage data found for available providers "
+        f"({available_labels}). Preferred order is {preferred_labels}."
     )
 
-    if requested and len(providers_to_render) < len(requested):
-        missing = [provider for provider in requested if not rows_by_provider.get(provider)]
-        raise ValueError(get_requested_missing_providers_message(missing))
 
-    if not providers_to_render:
-        available_providers = [provider for provider in PROVIDER_IDS if availability_by_provider[provider]]
-        if available_providers:
-            available_labels = ", ".join(PROVIDER_STATUS_LABEL[provider] for provider in available_providers)
-            default_labels = ", ".join(PROVIDER_STATUS_LABEL[provider] for provider in DEFAULT_PROVIDER_IDS)
-            raise ValueError(
-                "No usage data found for available providers "
-                f"({available_labels}). Preferred order is {default_labels}. "
-                "Use --all or specify providers explicitly."
+def resolve_provider_ids_to_render(
+    values: ProviderSelectionValues,
+    availability_by_provider: dict[ProviderId, bool],
+    rows_by_provider: dict[ProviderId, UsageSummary | None],
+    end: datetime,
+    *,
+    selection_mode: SelectionMode,
+) -> list[UsageProviderId]:
+    summary_lookup = get_available_summary_lookup(rows_by_provider, end)
+    requested_flag_providers = get_requested_providers(values)
+
+    if values.providers:
+        provider_ids: list[UsageProviderId] = list(values.providers)
+    elif values.all:
+        provider_ids = ["all"]
+    elif requested_flag_providers:
+        provider_ids = list(requested_flag_providers)
+    elif selection_mode == "serve":
+        provider_ids = get_default_service_provider_ids(summary_lookup)
+    else:
+        provider_ids = list(get_default_output_provider_ids(rows_by_provider))
+
+    if not provider_ids:
+        raise ValueError(
+            get_no_data_with_available_message(
+                availability_by_provider,
+                selection_mode=selection_mode,
             )
-        raise ValueError(get_merged_no_data_message())
+        )
 
-    return [rows_by_provider[provider] for provider in providers_to_render if rows_by_provider[provider]]
+    available_provider_ids, missing = filter_available_provider_ids(provider_ids, summary_lookup)
+    if available_provider_ids:
+        return available_provider_ids
+
+    if values.providers or values.all or requested_flag_providers:
+        if missing:
+            raise ValueError(get_no_selected_provider_data_message(provider_ids))
+        raise ValueError(get_no_selected_provider_data_message(provider_ids))
+
+    raise ValueError(
+        get_no_data_with_available_message(
+            availability_by_provider,
+            selection_mode=selection_mode,
+        )
+    )
 
 
 def get_output_providers(
     values: ProviderSelectionValues,
-    availability_by_provider: dict[str, bool],
-    rows_by_provider: dict[str, UsageSummary | None],
+    availability_by_provider: dict[ProviderId, bool],
+    rows_by_provider: dict[ProviderId, UsageSummary | None],
+    end: datetime,
+    *,
+    selection_mode: SelectionMode,
+) -> list[UsageSummary]:
+    summary_lookup = get_available_summary_lookup(rows_by_provider, end)
+    provider_ids = resolve_provider_ids_to_render(
+        values,
+        availability_by_provider,
+        rows_by_provider,
+        end,
+        selection_mode=selection_mode,
+    )
+    return [summary_lookup[provider] for provider in provider_ids]
+
+
+def get_output_providers_for_ids(
+    provider_ids: list[UsageProviderId],
+    rows_by_provider: dict[ProviderId, UsageSummary | None],
     end: datetime,
 ) -> list[UsageSummary]:
-    if not values.all:
-        return select_providers_to_render(
-            availability_by_provider,
-            rows_by_provider,
-            get_requested_providers(values),
-        )
+    if not provider_ids:
+        raise ValueError("Select at least one provider to export.")
 
-    merged = merge_provider_usage(rows_by_provider, end)
-    if merged is None:
-        raise ValueError(get_merged_no_data_message())
-    return [merged]
+    summary_lookup = get_available_summary_lookup(rows_by_provider, end)
+    available_provider_ids, missing = filter_available_provider_ids(provider_ids, summary_lookup)
+    if not available_provider_ids:
+        if missing:
+            raise ValueError(get_no_selected_provider_data_message(provider_ids))
+        raise ValueError("Select at least one provider to export.")
+    return [summary_lookup[provider] for provider in available_provider_ids]
 
 
 def print_run_summary(
@@ -199,7 +339,7 @@ def print_run_summary(
     color_mode: ColorMode,
     start_date: datetime,
     end_date: datetime,
-    rendered: list[str],
+    rendered: list[UsageProviderId],
 ) -> None:
     print(
         json.dumps(
@@ -218,7 +358,7 @@ def print_run_summary(
 
 def build_render_sections(
     export_providers: list[UsageSummary],
-    rows_by_provider: dict[str, UsageSummary | None],
+    rows_by_provider: dict[ProviderId, UsageSummary | None],
 ) -> list[RenderSection]:
     sections: list[RenderSection] = []
     for provider in export_providers:
@@ -243,7 +383,7 @@ def build_export_payload(
     start: datetime,
     end: datetime,
     color_mode: ColorMode,
-    rows_by_provider: dict[str, UsageSummary | None],
+    rows_by_provider: dict[ProviderId, UsageSummary | None],
 ) -> dict[str, object]:
     providers = []
     for provider in export_providers:
@@ -265,12 +405,24 @@ def build_export_payload(
     )
 
 
-def analyze_usage(values: CliArgValues) -> AnalysisBundle:
+def analyze_usage(values: CliArgValues, *, selection_mode: SelectionMode) -> AnalysisBundle:
     with stdout.status("Analyzing usage data..."):
         start, end = get_date_window()
         color_mode: ColorMode = "dark" if values.dark else "light"
-        requested_providers = PROVIDER_IDS if values.all else get_requested_providers(values)
-        inspected_providers = requested_providers if requested_providers else PROVIDER_IDS
+
+        if values.providers:
+            includes_all = "all" in values.providers
+            requested_from_providers = [provider for provider in values.providers if provider != "all"]
+            requested_providers = (
+                list(PROVIDER_IDS)
+                if includes_all
+                else [cast(ProviderId, provider) for provider in requested_from_providers]
+            )
+            inspected_providers = list(PROVIDER_IDS) if includes_all else (requested_providers or list(PROVIDER_IDS))
+        else:
+            requested_providers = list(PROVIDER_IDS) if values.all else get_requested_providers(values)
+            inspected_providers = requested_providers if requested_providers else list(PROVIDER_IDS)
+
         availability_by_provider = get_provider_availability(inspected_providers)
         aggregate_result = aggregate_usage(
             start=start,
@@ -287,6 +439,7 @@ def analyze_usage(values: CliArgValues) -> AnalysisBundle:
         availability_by_provider,
         aggregate_result.rows_by_provider,
         end,
+        selection_mode=selection_mode,
     )
     payload = build_export_payload(
         export_providers,
@@ -348,8 +501,40 @@ def write_export(bundle: AnalysisBundle, values: CliArgValues) -> Path:
 
 
 def run_export(values: CliArgValues) -> Path:
-    bundle = analyze_usage(values)
+    bundle = analyze_usage(values, selection_mode="export")
     return write_export(bundle, values)
+
+
+def build_service_payload(payload: dict[str, object]) -> dict[str, object]:
+    service_payload = dict(payload)
+    service_payload["ui"] = {
+        "storageKey": SERVICE_STORAGE_KEY,
+        "export": {
+            "endpoint": SERVICE_EXPORT_ENDPOINT,
+            "format": "png",
+        },
+    }
+    return service_payload
+
+
+def build_service_png_export(
+    bundle: AnalysisBundle,
+    provider_ids: list[str],
+) -> tuple[bytes, str]:
+    normalized_provider_ids = normalize_usage_provider_ids(provider_ids)
+    export_providers = get_output_providers_for_ids(
+        normalized_provider_ids,
+        bundle.aggregate_result.rows_by_provider,
+        bundle.end,
+    )
+    sections = build_render_sections(export_providers, bundle.aggregate_result.rows_by_provider)
+    png_bytes = render_usage_heatmaps_png(
+        start_date=bundle.start,
+        end_date=bundle.end,
+        sections=sections,
+        color_mode=bundle.color_mode,
+    )
+    return png_bytes, f"slopmeter_{'_'.join(normalized_provider_ids)}.png"
 
 
 def run_serve(
@@ -359,13 +544,14 @@ def run_serve(
     port: int,
     strict_port: bool,
 ) -> str:
-    bundle = analyze_usage(values)
-    document = render_html_document(bundle.payload)
+    bundle = analyze_usage(values, selection_mode="serve")
+    document = render_html_document(build_service_payload(bundle.payload))
     server, url = create_html_server(
         document,
         host=host,
         port=port,
         strict_port=strict_port,
+        export_png=lambda provider_ids: build_service_png_export(bundle, provider_ids),
     )
 
     stdout.print(f"Serving slopmeter at {url}")
@@ -393,6 +579,7 @@ def main(
     ctx: typer.Context,
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8000, "--port", min=1, max=65535),
+    providers: list[str] | None = typer.Option(None, "--provider", "-p"),
     dark: bool = typer.Option(False, "--dark"),
     all: bool = typer.Option(False, "--all"),
     amp: bool = typer.Option(False, "--amp"),
@@ -407,6 +594,7 @@ def main(
         return
 
     values = build_cli_values(
+        providers=providers,
         dark=dark,
         all=all,
         amp=amp,
@@ -433,6 +621,7 @@ def serve_command(
     ctx: typer.Context,
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8000, "--port", min=1, max=65535),
+    providers: list[str] | None = typer.Option(None, "--provider", "-p"),
     dark: bool = typer.Option(False, "--dark"),
     all: bool = typer.Option(False, "--all"),
     amp: bool = typer.Option(False, "--amp"),
@@ -444,6 +633,7 @@ def serve_command(
     pi: bool = typer.Option(False, "--pi"),
 ) -> None:
     values = build_cli_values(
+        providers=providers,
         dark=dark,
         all=all,
         amp=amp,
@@ -469,6 +659,7 @@ def serve_command(
 def export_command(
     output: str | None = typer.Option(None, "--output", "-o"),
     format: str | None = typer.Option(None, "--format", "-f"),
+    providers: list[str] | None = typer.Option(None, "--provider", "-p"),
     dark: bool = typer.Option(False, "--dark"),
     all: bool = typer.Option(False, "--all"),
     amp: bool = typer.Option(False, "--amp"),
@@ -482,6 +673,7 @@ def export_command(
     values = build_cli_values(
         output=output,
         format=format,
+        providers=providers,
         dark=dark,
         all=all,
         amp=amp,

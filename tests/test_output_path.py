@@ -44,3 +44,12 @@ def test_default_output_suffix_follows_provider_flag_order():
         )
         == "_amp_gemini_opencode_pi"
     )
+
+
+def test_default_output_suffix_prefers_explicit_provider_order():
+    assert (
+        get_default_output_suffix(
+            create_values(providers=["all", "opencode", "codex"])
+        )
+        == "_all_opencode_codex"
+    )

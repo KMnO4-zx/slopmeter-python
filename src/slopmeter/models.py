@@ -86,4 +86,3 @@ class JsonExportPayload:
     end: str
     providers: list[JsonProviderSummary]
     color_mode: ColorMode
-
