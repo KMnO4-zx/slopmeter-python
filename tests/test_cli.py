@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
-from slopmeter_py.cli import app
-from slopmeter_py.models import CacheTokens, DailyUsage
-from slopmeter_py.providers.cursor import summarize_cursor_usage_csv_text
-from slopmeter_py.render import (
+from slopmeter.cli import app, build_cli_values, run_serve
+from slopmeter.models import CacheTokens, DailyUsage
+from slopmeter.providers.cursor import summarize_cursor_usage_csv_text
+from slopmeter.render import (
     RenderSection,
     build_heatmap_scene,
     get_calendar_grid,
@@ -123,8 +123,82 @@ def open_code_message(**overrides) -> str:
     )
 
 
+def base_env(tmp_path: Path, **overrides: str) -> dict[str, str]:
+    env = {
+        "HOME": str(tmp_path),
+        "XDG_CONFIG_HOME": str(tmp_path / ".config"),
+        "XDG_DATA_HOME": str(tmp_path / ".local" / "share"),
+    }
+    env.update(overrides)
+    return env
+
+
 def invoke(args: list[str], env: dict[str, str]):
     return runner.invoke(app, args, env=env, catch_exceptions=False)
+
+
+def test_root_command_defaults_to_serve(monkeypatch, tmp_path: Path):
+    captured: dict[str, object] = {}
+
+    def fake_run_serve(values, *, host, port, strict_port):
+        captured["values"] = values
+        captured["host"] = host
+        captured["port"] = port
+        captured["strict_port"] = strict_port
+        return "http://127.0.0.1:8000"
+
+    monkeypatch.setattr("slopmeter.cli.run_serve", fake_run_serve)
+
+    result = invoke([], base_env(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert captured["host"] == "127.0.0.1"
+    assert captured["port"] == 8000
+    assert captured["strict_port"] is False
+    assert captured["values"].dark is False
+
+
+def test_serve_command_treats_explicit_port_as_strict(monkeypatch, tmp_path: Path):
+    captured: dict[str, object] = {}
+
+    def fake_run_serve(values, *, host, port, strict_port):
+        captured["host"] = host
+        captured["port"] = port
+        captured["strict_port"] = strict_port
+        return "http://127.0.0.1:9000"
+
+    monkeypatch.setattr("slopmeter.cli.run_serve", fake_run_serve)
+
+    result = invoke(["serve", "--port", "9000", "--codex"], base_env(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "host": "127.0.0.1",
+        "port": 9000,
+        "strict_port": True,
+    }
+
+
+def test_run_serve_prints_final_url(monkeypatch, capsys):
+    class DummyServer:
+        def serve_forever(self) -> None:
+            raise KeyboardInterrupt()
+
+        def server_close(self) -> None:
+            return
+
+    monkeypatch.setattr("slopmeter.cli.analyze_usage", lambda values: SimpleNamespace(payload={"providers": []}))
+    monkeypatch.setattr("slopmeter.cli.render_html_document", lambda payload: "<html>ok</html>")
+    monkeypatch.setattr(
+        "slopmeter.cli.create_html_server",
+        lambda document, *, host, port, strict_port: (DummyServer(), "http://127.0.0.1:8000"),
+    )
+
+    run_serve(build_cli_values(), host="127.0.0.1", port=8000, strict_port=False)
+
+    captured = capsys.readouterr()
+    assert "Serving slopmeter at http://127.0.0.1:8000" in captured.out
+    assert "Stopping slopmeter" in captured.out
 
 
 def test_codex_json_export_from_cumulative_totals(tmp_path: Path):
@@ -161,13 +235,8 @@ def test_codex_json_export_from_cumulative_totals(tmp_path: Path):
     )
 
     result = invoke(
-        ["--codex", "--format", "json", "--output", str(output_path)],
-        {
-            "HOME": str(tmp_path),
-            "XDG_CONFIG_HOME": str(tmp_path / ".config"),
-            "XDG_DATA_HOME": str(tmp_path / ".local" / "share"),
-            "CODEX_HOME": str(codex_home),
-        },
+        ["export", "--codex", "--format", "json", "--output", str(output_path)],
+        base_env(tmp_path, CODEX_HOME=str(codex_home)),
     )
 
     assert result.exit_code == 0, result.output
@@ -193,13 +262,8 @@ def test_claude_history_fallback_emits_activity_only_days(tmp_path: Path):
     )
 
     result = invoke(
-        ["--claude", "--format", "json", "--output", str(output_path)],
-        {
-            "HOME": str(tmp_path),
-            "XDG_CONFIG_HOME": str(tmp_path / ".config"),
-            "XDG_DATA_HOME": str(tmp_path / ".local" / "share"),
-            "CLAUDE_CONFIG_DIR": str(claude_config),
-        },
+        ["export", "--claude", "--format", "json", "--output", str(output_path)],
+        base_env(tmp_path, CLAUDE_CONFIG_DIR=str(claude_config)),
     )
 
     assert result.exit_code == 0, result.output
@@ -219,13 +283,8 @@ def test_opencode_reads_legacy_file_backed_message_layout(tmp_path: Path):
     )
 
     result = invoke(
-        ["--opencode", "--format", "json", "--output", str(output_path)],
-        {
-            "HOME": str(tmp_path),
-            "XDG_CONFIG_HOME": str(tmp_path / ".config"),
-            "XDG_DATA_HOME": str(tmp_path / ".local" / "share"),
-            "OPENCODE_DATA_DIR": str(open_code_dir),
-        },
+        ["export", "--opencode", "--format", "json", "--output", str(output_path)],
+        base_env(tmp_path, OPENCODE_DATA_DIR=str(open_code_dir)),
     )
 
     assert result.exit_code == 0, result.output
@@ -267,16 +326,11 @@ def test_html_svg_and_png_exports_are_generated(tmp_path: Path):
             codex_token_count(input=12, output=8, total=20),
         ],
     )
-    env = {
-        "HOME": str(tmp_path),
-        "XDG_CONFIG_HOME": str(tmp_path / ".config"),
-        "XDG_DATA_HOME": str(tmp_path / ".local" / "share"),
-        "CODEX_HOME": str(codex_home),
-    }
+    env = base_env(tmp_path, CODEX_HOME=str(codex_home))
 
-    html_result = invoke(["--codex", "--format", "html", "--output", str(html_path)], env)
-    svg_result = invoke(["--codex", "--format", "svg", "--output", str(svg_path)], env)
-    png_result = invoke(["--codex", "--format", "png", "--output", str(png_path)], env)
+    html_result = invoke(["export", "--codex", "--format", "html", "--output", str(html_path)], env)
+    svg_result = invoke(["export", "--codex", "--format", "svg", "--output", str(svg_path)], env)
+    png_result = invoke(["export", "--codex", "--format", "png", "--output", str(png_path)], env)
 
     assert html_result.exit_code == 0, html_result.output
     assert svg_result.exit_code == 0, svg_result.output
@@ -311,7 +365,10 @@ def test_static_header_metrics_align_to_calendar_right_edge():
         daily=daily,
         insights=None,
         title="Codex",
-        colors={"light": ["#e0e7ff", "#a5b4fc", "#818cf8", "#4f46e5", "#312e81"], "dark": ["#1e1b4b", "#312e81", "#4338ca", "#818cf8", "#c7d2fe"]},
+        colors={
+            "light": ["#e0e7ff", "#a5b4fc", "#818cf8", "#4f46e5", "#312e81"],
+            "dark": ["#1e1b4b", "#312e81", "#4338ca", "#818cf8", "#c7d2fe"],
+        },
     )
 
     scene = build_heatmap_scene(

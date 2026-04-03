@@ -1,4 +1,4 @@
-from slopmeter_py.output_path import (
+from slopmeter.output_path import (
     ProviderSelectionValues,
     get_default_output_path,
     get_default_output_suffix,
@@ -44,4 +44,3 @@ def test_default_output_suffix_follows_provider_flag_order():
         )
         == "_amp_gemini_opencode_pi"
     )
-
