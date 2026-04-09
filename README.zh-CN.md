@@ -3,7 +3,7 @@
 ![Example heatmap](https://raw.githubusercontent.com/KMnO4-zx/slopmeter-python/master/images/slopmeter_all.png)
 
 <p align="center">
-  <a href="./README.md">English</a> | <a href="./README.zh-CN.md">简体中文</a>
+  <a href="https://github.com/KMnO4-zx/slopmeter-python/blob/master/README.md">English</a> | <a href="https://github.com/KMnO4-zx/slopmeter-python/blob/master/README.zh-CN.md">简体中文</a>
 </p>
 
 这是一个用于展示 AI 编码工具使用热力图，并提供本地网页查看器的工具。

@@ -811,21 +811,36 @@ def measure_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont
     return bbox[2] - bbox[0], bbox[3] - bbox[1]
 
 
-def draw_text_node(draw: ImageDraw.ImageDraw, node: TextNode, scale: float) -> None:
-    font_size = max(8, round(node.font_size * scale))
-    font = load_font(font_size, node.font_weight >= 600)
-    width, height = measure_text(draw, node.text, font)
+def resolve_text_draw_origin(
+    node: TextNode,
+    *,
+    scale: float,
+    bbox: tuple[int, int, int, int],
+) -> tuple[float, float]:
+    left, top, right, bottom = bbox
     draw_x = node.x * scale
     draw_y = node.y * scale
 
     if node.anchor == "end":
-        draw_x -= width
+        draw_x -= right
     elif node.anchor == "middle":
-        draw_x -= width / 2
+        draw_x -= (left + right) / 2
+    else:
+        draw_x -= left
 
     if node.baseline == "middle":
-        draw_y -= height / 2
+        draw_y -= (top + bottom) / 2
+    else:
+        draw_y -= top
 
+    return draw_x, draw_y
+
+
+def draw_text_node(draw: ImageDraw.ImageDraw, node: TextNode, scale: float) -> None:
+    font_size = max(8, round(node.font_size * scale))
+    font = load_font(font_size, node.font_weight >= 600)
+    bbox = draw.textbbox((0, 0), node.text, font=font)
+    draw_x, draw_y = resolve_text_draw_origin(node, scale=scale, bbox=bbox)
     draw.text((draw_x, draw_y), node.text, fill=node.fill, font=font)
 
 
