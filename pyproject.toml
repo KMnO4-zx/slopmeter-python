@@ -4,12 +4,32 @@ version = "0.1.0"
 description = "Local usage heatmaps and web viewer for AI coding tools."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  { name = "KMnO4-zx" }
+]
+keywords = ["ai", "cli", "heatmap", "codex", "cursor", "claude"]
+classifiers = [
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development",
+]
 dependencies = [
   "httpx>=0.28.1",
   "pillow>=11.2.1",
   "rich>=14.0.0",
   "typer>=0.16.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/KMnO4-zx/slopmeter-python"
+Repository = "https://github.com/KMnO4-zx/slopmeter-python"
+Issues = "https://github.com/KMnO4-zx/slopmeter-python/issues"
 
 [project.optional-dependencies]
 dev = [

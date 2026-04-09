@@ -1,6 +1,6 @@
 # slopmeter
 
-![Example heatmap](./images/slopmeter_all.png)
+![Example heatmap](https://raw.githubusercontent.com/KMnO4-zx/slopmeter-python/master/images/slopmeter_all.png)
 
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README.zh-CN.md">简体中文</a>
