@@ -43,6 +43,20 @@ uv tool install .
 
 After installing with `uv pip install .` or `uv tool install .`, you can run `slopmeter` directly without `uv run`.
 
+### Option 4: Install the published package from PyPI
+
+Use this when you want to install the released version directly from PyPI.
+
+```bash
+uv tool install slopmeter
+```
+
+Upgrade later with:
+
+```bash
+uv tool upgrade slopmeter
+```
+
 ## Quick Start
 
 Start the local web UI:
@@ -266,3 +280,10 @@ slopmeter export --help
 ## Credits
 
 This project is a Python adaptation of [JeanMeijer/slopmeter](https://github.com/JeanMeijer/slopmeter). Credit to the original author for the idea and implementation.
+
+## Roadmap
+
+- [ ] Privacy-first multi-device usage aggregation for the same user, without requiring a central server.
+  - The intended direction is explicit, user-controlled sync only: for example encrypted export/import bundles or merge through a user-owned sync folder.
+  - Default behavior should remain local-only, with no background sync, no telemetry, and no automatic upload to any server.
+  - The main challenges are deduplication, clock skew, and keeping a stable merge format across providers and devices.

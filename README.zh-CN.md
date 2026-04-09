@@ -42,6 +42,20 @@ uv tool install .
 
 如果你使用 `uv pip install .` 或 `uv tool install .` 安装完成，之后就可以直接运行 `slopmeter`，不需要再写 `uv run`。
 
+### 方式 4：从 PyPI 安装已发布版本
+
+适合你想直接安装 PyPI 上已经发布的正式版本。
+
+```bash
+uv tool install slopmeter
+```
+
+后续升级可以使用：
+
+```bash
+uv tool upgrade slopmeter
+```
+
 ## 快速开始
 
 启动本地网页界面：
@@ -264,3 +278,10 @@ slopmeter export --help
 ## 参考
 
 本项目来自 [JeanMeijer/slopmeter](https://github.com/JeanMeijer/slopmeter) 的 Python 版本，感谢原作者的创意和实现。
+
+## Roadmap
+
+- [ ] 支持同一用户在多台设备之间聚合 usage，并且不依赖中心服务器，同时尽量保持隐私友好。
+  - 计划优先采用“用户显式触发、用户自己控制”的同步方式，例如加密导入/导出包，或基于用户自有同步目录的合并。
+  - 默认行为仍应保持为纯本地：不做后台同步、不做 telemetry、也不会自动上传到任何服务器。
+  - 主要难点在于去重、时间偏差，以及跨 provider / 跨设备时保持稳定的合并格式。
