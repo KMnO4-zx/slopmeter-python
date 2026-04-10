@@ -20,7 +20,7 @@ classifiers = [
   "Topic :: Software Development",
 ]
 dependencies = [
-  "httpx>=0.28.1",
+  "httpx[socks]>=0.28.1",
   "pillow>=11.2.1",
   "rich>=14.0.0",
   "typer>=0.16.0",
