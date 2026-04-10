@@ -76,6 +76,8 @@ class RenderSection:
     title: str
     colors: dict[ColorMode, list[str]]
     title_caption: str | None = None
+    total_cost_label: str | None = None
+    pricing_model_name: str | None = None
 
 
 @dataclass
@@ -466,6 +468,8 @@ def draw_heatmap_section(
     colors: dict[ColorMode, list[str]],
     color_mode: ColorMode,
     palette: SurfacePalette,
+    total_cost_label: str | None = None,
+    pricing_model_name: str | None = None,
 ) -> None:
     colors_for_mode = colors[color_mode]
     legend_colors = [EMPTY_CELL_FILL[color_mode], *colors_for_mode[1:]]
@@ -651,15 +655,31 @@ def draw_heatmap_section(
         font_weight=600,
     )
 
-    if first_activity_only_date and first_measured_date:
-        note_x = x + (layout.content_width / 2)
-        note_y = y + layout.grid_top + 7 * layout.cell_size + 6 * layout.gap + scale_spacing(
-            BASE_NOTE_TEXT_OFFSET, layout.scale
-        )
+    note_x = x + (layout.content_width / 2)
+    note_line_height = layout.note_font_size + scale_spacing(4, layout.scale)
+    next_note_y = y + layout.grid_top + 7 * layout.cell_size + 6 * layout.gap + scale_spacing(
+        BASE_NOTE_TEXT_OFFSET, layout.scale
+    )
+
+    if total_cost_label and pricing_model_name:
+        cost_font_size = int(round(layout.note_font_size * 1.2))
         add_text(
             scene,
             x=note_x,
-            y=note_y,
+            y=next_note_y,
+            text=f"Estimated cost (priced as {pricing_model_name}): {total_cost_label}",
+            fill=palette.text,
+            font_size=cost_font_size,
+            font_weight=700,
+            anchor="middle",
+        )
+        next_note_y += cost_font_size + scale_spacing(4, layout.scale)
+
+    if first_activity_only_date and first_measured_date:
+        add_text(
+            scene,
+            x=note_x,
+            y=next_note_y,
             text=(
                 "Claude started logging full token telemetry on "
                 f"{format_short_date(first_measured_date)}; earlier activity may be undercounted."
@@ -763,6 +783,8 @@ def build_heatmap_scene(
             colors=section.colors,
             color_mode=color_mode,
             palette=palette,
+            total_cost_label=section.total_cost_label,
+            pricing_model_name=section.pricing_model_name,
         )
 
     return scene
@@ -1190,6 +1212,12 @@ def render_html_document(payload: dict[str, Any]) -> str:
         color: var(--muted);
         font-size: var(--note-font, 12px);
       }}
+      .cost-note .cost-amount {{
+        font-style: italic;
+        font-weight: 700;
+        font-size: calc(var(--note-font, 12px) * 1.25);
+        color: var(--text);
+      }}
       .tooltip {{
         position: fixed;
         z-index: 20;
@@ -1347,6 +1375,24 @@ def render_html_document(payload: dict[str, Any]) -> str:
         return new Intl.NumberFormat("en-US").format(value);
       }}
 
+      function formatCost(dollars) {{
+        if (!dollars || dollars <= 0) return "$0";
+        const units = [
+          [1_000_000_000_000, "T"],
+          [1_000_000_000, "B"],
+          [1_000_000, "M"],
+          [1_000, "K"],
+        ];
+        for (const [size, suffix] of units) {{
+          if (dollars >= size) {{
+            const scaled = dollars / size;
+            const precision = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
+            return "$" + scaled.toFixed(precision).replace(/\\.0+$/, "").replace(/(\\.\\d*[1-9])0+$/, "$1") + suffix;
+          }}
+        }}
+        return dollars >= 1 ? "$" + Math.round(dollars) : "$" + dollars.toFixed(2);
+      }}
+
       function parseDateKey(value) {{
         const [year, month, day] = value.split("-").map(Number);
         return new Date(Date.UTC(year, month - 1, day));
@@ -1416,15 +1462,19 @@ def render_html_document(payload: dict[str, Any]) -> str:
         return Math.min(Math.max(Math.ceil(scaled * (colorCount - 1)), 0), colorCount - 1);
       }}
 
-      function showTooltip(event, day, row) {{
+      function showTooltip(event, day, row, pricingModel) {{
         const breakdown = (row.breakdown || []).slice(0, 3).map((item) =>
           `<div class="tooltip-line">${{item.name}}: ${{formatTokenTotal(item.tokens.total)}}</div>`
         ).join("");
+        const costLine = typeof row.costUsd === "number" && row.costUsd > 0
+          ? `<div class="tooltip-line">Est. cost: ${{formatCost(row.costUsd)}}${{pricingModel ? ` (priced as ${{pricingModel}})` : ""}}</div>`
+          : "";
         tooltip.innerHTML = `
           <div class="tooltip-title">${{formatTooltipDate(day)}}</div>
           <div class="tooltip-line">${{formatTokenTotal(row.total)}} total tokens</div>
           <div class="tooltip-line">In: ${{formatTokenTotal(row.input)}} | Out: ${{formatTokenTotal(row.output)}}</div>
           <div class="tooltip-line">Cache In: ${{formatTokenTotal(row.cache.input)}} | Cache Out: ${{formatTokenTotal(row.cache.output)}}</div>
+          ${{costLine}}
           ${{breakdown || '<div class="tooltip-line">No model breakdown</div>'}}
         `;
         tooltip.classList.add("is-visible");
@@ -1953,7 +2003,7 @@ def render_html_document(payload: dict[str, Any]) -> str:
             button.style.gridRow = String(dayIndex + 2);
             button.style.background = fill;
             button.setAttribute("aria-label", `${{day}}: ${{row.total}} total tokens`);
-            button.addEventListener("mouseenter", (event) => showTooltip(event, day, row));
+            button.addEventListener("mouseenter", (event) => showTooltip(event, day, row, provider.pricingModel));
             button.addEventListener("mousemove", moveTooltip);
             button.addEventListener("mouseleave", hideTooltip);
             calendarGrid.appendChild(button);
@@ -1976,6 +2026,18 @@ def render_html_document(payload: dict[str, Any]) -> str:
         more.textContent = "More";
         legend.appendChild(more);
         shell.appendChild(legend);
+
+        if (provider.totalCostLabel && provider.pricingModel) {{
+          const costNote = document.createElement("div");
+          costNote.className = "note cost-note";
+          const costPrefix = document.createTextNode(`Estimated cost (priced as ${{provider.pricingModel}}): `);
+          const costAmount = document.createElement("span");
+          costAmount.className = "cost-amount";
+          costAmount.textContent = provider.totalCostLabel;
+          costNote.appendChild(costPrefix);
+          costNote.appendChild(costAmount);
+          shell.appendChild(costNote);
+        }}
 
         if (firstActivityOnlyDate && firstMeasuredDate) {{
           const note = document.createElement("div");

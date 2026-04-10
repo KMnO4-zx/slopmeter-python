@@ -14,6 +14,7 @@ from rich.console import Console
 from .export import build_json_export, to_json_provider_summary
 from .models import ColorMode, ProviderId, UsageProviderId, UsageSummary
 from .output_path import ProviderSelectionValues, get_default_output_path
+from .pricing import compute_summary_cost, format_cost, select_pricing_model
 from .provider_meta import (
     DEFAULT_PROVIDER_IDS,
     ORDERABLE_PROVIDER_IDS,
@@ -365,6 +366,8 @@ def build_render_sections(
         theme_key = provider.provider if provider.provider != "all" else "all"
         theme = HEATMAP_THEMES[theme_key]
         title = get_merged_provider_title(rows_by_provider) if provider.provider == "all" else theme.title
+        pricing = select_pricing_model(provider)
+        total_cost = compute_summary_cost(provider, pricing)
         sections.append(
             RenderSection(
                 daily=provider.daily,
@@ -372,6 +375,8 @@ def build_render_sections(
                 title=title,
                 title_caption=theme.title_caption,
                 colors=theme.colors,
+                total_cost_label=format_cost(total_cost) if total_cost > 0 else None,
+                pricing_model_name=pricing.display_name if total_cost > 0 else None,
             )
         )
     return sections

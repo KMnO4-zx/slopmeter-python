@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from typer.testing import CliRunner
 
 from slopmeter.cli import analyze_usage, app, build_cli_values, run_serve
@@ -282,6 +283,13 @@ def test_codex_json_export_from_cumulative_totals(tmp_path: Path):
     assert payload["providers"][0]["provider"] == "codex"
     assert payload["providers"][0]["daily"][0]["total"] == 130
     assert payload["providers"][0]["daily"][0]["breakdown"][0]["name"] == "gpt-5.2"
+    # gpt-5.2 is not a reference model → default fallback to claude-opus-4-6
+    assert payload["version"] == "2026-04-10"
+    assert payload["providers"][0]["pricingModelKey"] == "claude-opus-4-6"
+    assert payload["providers"][0]["pricingModel"] == "claude-opus-4-6"
+    assert payload["providers"][0]["totalCostUsd"] > 0
+    assert payload["providers"][0]["totalCostLabel"].startswith("$")
+    assert "costUsd" in payload["providers"][0]["daily"][0]
 
 
 def test_claude_history_fallback_emits_activity_only_days(tmp_path: Path):
@@ -581,6 +589,48 @@ def test_cursor_csv_summary_reconstructs_cache_split():
     assert summary.daily[0].total == 42
 
 
+def test_cost_fields_select_gpt54_when_only_gpt54_present(tmp_path: Path):
+    codex_home = tmp_path / "codex"
+    output_path = tmp_path / "gpt54.json"
+    base_timestamp = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    write_jsonl_file(
+        codex_home / "sessions" / "session.jsonl",
+        [
+            codex_turn_context("gpt-5.4"),
+            codex_token_count(
+                timestamp=(base_timestamp + timedelta(seconds=1)).isoformat(),
+                input=1_000_000,
+                cachedInput=0,
+                output=500_000,
+                reasoningOutput=0,
+                total=1_500_000,
+                totalUsage=codex_usage(
+                    input=1_000_000,
+                    cachedInput=0,
+                    output=500_000,
+                    reasoningOutput=0,
+                    total=1_500_000,
+                ),
+            ),
+        ],
+    )
+
+    result = invoke(
+        ["export", "--codex", "--format", "json", "--output", str(output_path)],
+        base_env(tmp_path, CODEX_HOME=str(codex_home)),
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    provider = payload["providers"][0]
+    assert provider["pricingModelKey"] == "gpt-5.4"
+    # 1M input @ $2.50/M + 500K output @ $15/M = 2.50 + 7.50 = 10.00
+    assert provider["totalCostUsd"] == pytest.approx(10.00, rel=1e-6)
+    assert provider["totalCostLabel"] == "$10"
+    assert provider["daily"][0]["costUsd"] == pytest.approx(10.00, rel=1e-6)
+
+
 def test_html_svg_and_png_exports_are_generated(tmp_path: Path):
     codex_home = tmp_path / "codex"
     html_path = tmp_path / "heatmap.html"
@@ -619,6 +669,13 @@ def test_html_svg_and_png_exports_are_generated(tmp_path: Path):
     assert 'addEventListener("dragstart"' not in html_text
     assert 'addEventListener("drop"' not in html_text
     assert "toISOString().slice(0, 10)" not in html_text
+    # Cost estimation wiring
+    assert "function formatCost(" in html_text
+    assert "Estimated cost (priced as" in html_text
+    assert "row.costUsd" in html_text
+    assert "Est. cost:" in html_text
+    assert "priced as ${pricingModel}" in html_text
+    assert "provider.pricingModel" in html_text
     assert svg_path.read_text(encoding="utf-8").startswith("<svg")
     assert png_path.stat().st_size > 0
 

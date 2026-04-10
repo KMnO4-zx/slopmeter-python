@@ -77,6 +77,10 @@ class JsonProviderSummary:
     colors: list[str]
     daily: list[dict[str, object]]
     insights: dict[str, object] | None
+    pricing_model: str = ""
+    pricing_model_key: str = ""
+    total_cost_usd: float = 0.0
+    total_cost_label: str = ""
 
 
 @dataclass
