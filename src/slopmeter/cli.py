@@ -11,7 +11,10 @@ import typer
 from click.core import ParameterSource
 from rich.console import Console
 
+from .bundle_export import build_bundle_payload, build_device_source, build_theme_payload
+from .device_meta import get_or_create_device_metadata
 from .export import build_json_export, to_json_provider_summary
+from .html_document import render_html_document
 from .models import ColorMode, ProviderId, UsageProviderId, UsageSummary
 from .output_path import ProviderSelectionValues, get_default_output_path
 from .provider_meta import (
@@ -22,9 +25,10 @@ from .provider_meta import (
     SERVICE_DEFAULT_PROVIDER_IDS,
 )
 from .providers import AggregateUsageResult, aggregate_usage, get_provider_availability, merge_provider_usage
-from .render import HEATMAP_THEMES, RenderSection, render_html_document, render_usage_heatmaps_png, render_usage_heatmaps_svg
+from .render import HEATMAP_THEMES, RenderSection, render_usage_heatmaps_png, render_usage_heatmaps_svg
 from .server import create_html_server
 from .utils import format_local_date
+from .yaml_bundle import dump_yaml
 
 SelectionMode = Literal["serve", "export"]
 SERVICE_EXPORT_ENDPOINT = "/api/export"
@@ -397,12 +401,90 @@ def build_export_payload(
                 colors=theme.colors[color_mode],
             )
         )
-    return build_json_export(
+    payload = build_json_export(
         start=start,
         end=end,
         color_mode=color_mode,
         providers=providers,
     )
+    bundle_source = build_device_source(
+        get_or_create_device_metadata(),
+        get_bundle_export_providers(export_providers, rows_by_provider),
+        generated_at=datetime.now(),
+    )
+    payload["bundle"] = build_bundle_payload(
+        start=start,
+        end=end,
+        sources=[bundle_source],
+    )
+    payload["themes"] = build_theme_payload(color_mode)
+    return payload
+
+
+def get_bundle_export_providers(
+    export_providers: list[UsageSummary],
+    rows_by_provider: dict[ProviderId, UsageSummary | None],
+) -> list[UsageSummary]:
+    selected: list[UsageSummary] = []
+    seen: set[ProviderId] = set()
+    includes_all = any(provider.provider == "all" for provider in export_providers)
+
+    if includes_all:
+        for provider_id in PROVIDER_IDS:
+            summary = rows_by_provider.get(provider_id)
+            if summary is None or provider_id in seen:
+                continue
+            selected.append(summary)
+            seen.add(provider_id)
+        return selected
+
+    for provider in export_providers:
+        if provider.provider not in PROVIDER_IDS:
+            continue
+        provider_id = cast(ProviderId, provider.provider)
+        if provider_id in seen:
+            continue
+        selected.append(provider)
+        seen.add(provider_id)
+    return selected
+
+
+def get_data_export_providers(
+    values: ProviderSelectionValues,
+    rows_by_provider: dict[ProviderId, UsageSummary | None],
+) -> list[UsageSummary]:
+    summary_lookup = {
+        provider: summary
+        for provider, summary in rows_by_provider.items()
+        if summary is not None
+    }
+
+    if values.providers:
+        requested: list[ProviderId] = []
+        includes_all = "all" in values.providers
+        if includes_all:
+            requested.extend(PROVIDER_IDS)
+        for provider in values.providers:
+            if provider == "all":
+                continue
+            provider_id = cast(ProviderId, provider)
+            if provider_id not in requested:
+                requested.append(provider_id)
+    elif values.all:
+        requested = list(PROVIDER_IDS)
+    else:
+        requested_flags = get_requested_providers(values)
+        requested = requested_flags or list(PROVIDER_IDS)
+
+    selected = [summary_lookup[provider] for provider in requested if provider in summary_lookup]
+    if selected:
+        return selected
+
+    if requested:
+        labels = ", ".join(PROVIDER_STATUS_LABEL[provider] for provider in requested)
+        raise ValueError(f"No usage data found for selected providers: {labels}")
+
+    raise ValueError(get_merged_no_data_message())
 
 
 def analyze_usage(values: CliArgValues, *, selection_mode: SelectionMode) -> AnalysisBundle:
@@ -503,6 +585,45 @@ def write_export(bundle: AnalysisBundle, values: CliArgValues) -> Path:
 def run_export(values: CliArgValues) -> Path:
     bundle = analyze_usage(values, selection_mode="export")
     return write_export(bundle, values)
+
+
+def get_default_bundle_output_path() -> str:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"./slopmeter-bundle-{timestamp}.yaml"
+
+
+def run_export_data(values: CliArgValues) -> Path:
+    bundle = analyze_usage(values, selection_mode="export")
+    provider_summaries = get_data_export_providers(values, bundle.aggregate_result.rows_by_provider)
+    device_metadata = get_or_create_device_metadata()
+    payload = build_bundle_payload(
+        start=bundle.start,
+        end=bundle.end,
+        sources=[
+            build_device_source(
+                device_metadata,
+                provider_summaries,
+                generated_at=datetime.now(),
+            )
+        ],
+    )
+    output_path = Path(values.output or get_default_bundle_output_path()).expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(dump_yaml(payload), encoding="utf-8")
+    stdout.print("Analysis complete")
+    print(
+        json.dumps(
+            {
+                "output": str(output_path),
+                "format": "yaml",
+                "kind": payload["kind"],
+                "sourceCount": len(payload["sources"]),
+                "providers": [provider.provider for provider in provider_summaries],
+            },
+            indent=2,
+        )
+    )
+    return output_path
 
 
 def build_service_payload(payload: dict[str, object]) -> dict[str, object]:
@@ -686,5 +807,36 @@ def export_command(
     )
     try:
         run_export(values)
+    except Exception as error:  # pragma: no cover - top-level CLI guard
+        handle_cli_error(error)
+
+
+@app.command("export-data")
+def export_data_command(
+    output: str | None = typer.Option(None, "--output", "-o"),
+    providers: list[str] | None = typer.Option(None, "--provider", "-p"),
+    all: bool = typer.Option(False, "--all"),
+    amp: bool = typer.Option(False, "--amp"),
+    claude: bool = typer.Option(False, "--claude"),
+    codex: bool = typer.Option(False, "--codex"),
+    cursor: bool = typer.Option(False, "--cursor"),
+    gemini: bool = typer.Option(False, "--gemini"),
+    opencode: bool = typer.Option(False, "--opencode"),
+    pi: bool = typer.Option(False, "--pi"),
+) -> None:
+    values = build_cli_values(
+        output=output,
+        providers=providers,
+        all=all,
+        amp=amp,
+        claude=claude,
+        codex=codex,
+        cursor=cursor,
+        gemini=gemini,
+        opencode=opencode,
+        pi=pi,
+    )
+    try:
+        run_export_data(values)
     except Exception as error:  # pragma: no cover - top-level CLI guard
         handle_cli_error(error)

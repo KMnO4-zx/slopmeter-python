@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import yaml
 from typer.testing import CliRunner
 
 from slopmeter.cli import analyze_usage, app, build_cli_values, run_serve
@@ -16,7 +17,9 @@ from slopmeter.render import (
     get_calendar_grid,
     get_section_layout,
     get_target_content_width,
+    render_html_document as render_html_document_from_render,
 )
+from slopmeter.yaml_bundle import dump_yaml
 
 runner = CliRunner()
 
@@ -126,8 +129,13 @@ def open_code_message(**overrides) -> str:
 def base_env(tmp_path: Path, **overrides: str) -> dict[str, str]:
     env = {
         "HOME": str(tmp_path),
+        "USERPROFILE": str(tmp_path),
+        "HOMEDRIVE": tmp_path.drive or "C:",
+        "HOMEPATH": "\\" + "\\".join(tmp_path.parts[1:]) if len(tmp_path.parts) > 1 else "\\",
         "XDG_CONFIG_HOME": str(tmp_path / ".config"),
         "XDG_DATA_HOME": str(tmp_path / ".local" / "share"),
+        "APPDATA": str(tmp_path / "AppData" / "Roaming"),
+        "LOCALAPPDATA": str(tmp_path / "AppData" / "Local"),
     }
     env.update(overrides)
     return env
@@ -611,16 +619,144 @@ def test_html_svg_and_png_exports_are_generated(tmp_path: Path):
     assert "--layout-scale" in html_text
     assert "--shell-width" in html_text
     assert "function formatDateKey(value)" in html_text
-    assert "current.setUTCDate(current.getUTCDate() + 1);" in html_text
-    assert 'addEventListener("pointerdown"' in html_text
-    assert "function movePlaceholderToPointer(clientY)" in html_text
-    assert "provider-placeholder" in html_text
+    assert "current.setUTCDate(current.getUTCDate() + 1)" in html_text
+    assert "Export Data" in html_text
+    assert "Import Data" in html_text
+    assert "function parseYaml(text)" in html_text
+    assert "function dumpYaml(value, indent = 0)" in html_text
+    assert "payload.bundle" in html_text
     assert 'setAttribute("draggable", "true")' not in html_text
     assert 'addEventListener("dragstart"' not in html_text
     assert 'addEventListener("drop"' not in html_text
     assert "toISOString().slice(0, 10)" not in html_text
     assert svg_path.read_text(encoding="utf-8").startswith("<svg")
     assert png_path.stat().st_size > 0
+
+
+def test_export_data_emits_bundle_yaml_without_all(tmp_path: Path):
+    codex_home = tmp_path / "codex"
+    open_code_dir = tmp_path / "opencode"
+    output_path = tmp_path / "bundle.yaml"
+
+    write_jsonl_file(
+        codex_home / "sessions" / "session.jsonl",
+        [
+            codex_turn_context("gpt-5"),
+            codex_token_count(input=12, output=8, total=20),
+        ],
+    )
+    write_json_file(
+        open_code_dir / "storage" / "message" / "one.json",
+        open_code_message(id="msg-1", input=8, output=5, cacheRead=2),
+    )
+
+    result = invoke(
+        ["export-data", "--output", str(output_path)],
+        base_env(tmp_path, CODEX_HOME=str(codex_home), OPENCODE_DATA_DIR=str(open_code_dir)),
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "slopmeter-bundle"
+    assert len(payload["sources"]) == 1
+    assert [provider["id"] for provider in payload["sources"][0]["providers"]] == ["codex", "opencode"]
+    assert "all" not in [provider["id"] for provider in payload["sources"][0]["providers"]]
+
+
+def test_export_data_respects_explicit_provider_selection(tmp_path: Path):
+    codex_home = tmp_path / "codex"
+    open_code_dir = tmp_path / "opencode"
+    output_path = tmp_path / "codex-only.yaml"
+
+    write_jsonl_file(
+        codex_home / "sessions" / "session.jsonl",
+        [
+            codex_turn_context("gpt-5"),
+            codex_token_count(input=12, output=8, total=20),
+        ],
+    )
+    write_json_file(
+        open_code_dir / "storage" / "message" / "one.json",
+        open_code_message(id="msg-1", input=8, output=5, cacheRead=2),
+    )
+
+    result = invoke(
+        ["export-data", "--provider", "codex", "--output", str(output_path)],
+        base_env(tmp_path, CODEX_HOME=str(codex_home), OPENCODE_DATA_DIR=str(open_code_dir)),
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(output_path.read_text(encoding="utf-8"))
+    assert [provider["id"] for provider in payload["sources"][0]["providers"]] == ["codex"]
+
+
+def test_export_data_reuses_persisted_device_id(tmp_path: Path):
+    codex_home = tmp_path / "codex"
+    first_output = tmp_path / "first.yaml"
+    second_output = tmp_path / "second.yaml"
+    env = base_env(tmp_path, CODEX_HOME=str(codex_home))
+
+    write_jsonl_file(
+        codex_home / "sessions" / "session.jsonl",
+        [
+            codex_turn_context("gpt-5"),
+            codex_token_count(input=12, output=8, total=20),
+        ],
+    )
+
+    first = invoke(["export-data", "--output", str(first_output)], env)
+    second = invoke(["export-data", "--output", str(second_output)], env)
+
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+
+    first_payload = yaml.safe_load(first_output.read_text(encoding="utf-8"))
+    second_payload = yaml.safe_load(second_output.read_text(encoding="utf-8"))
+    assert first_payload["sources"][0]["device"]["id"] == second_payload["sources"][0]["device"]["id"]
+
+
+def test_yaml_dump_serializes_empty_lists_inline():
+    yaml_text = dump_yaml({"breakdown": [], "sources": []})
+
+    assert "breakdown: []" in yaml_text
+    assert "sources: []" in yaml_text
+    assert "\n  []\n" not in yaml_text
+
+
+def test_render_module_html_entry_uses_new_toolbar():
+    html_text = render_html_document_from_render(
+        {
+            "colorMode": "light",
+            "start": "2025-01-01",
+            "end": "2025-12-31",
+            "bundle": {
+                "version": "2026-04-10",
+                "kind": "slopmeter-bundle",
+                "generatedAt": "2026-04-10T00:00:00Z",
+                "window": {"start": "2025-01-01", "end": "2025-12-31"},
+                "sources": [
+                    {
+                        "device": {
+                            "id": "device-1",
+                            "name": "test-device",
+                            "platform": "win32",
+                            "generatedAt": "2026-04-10T00:00:00Z",
+                            "timeZone": "UTC",
+                        },
+                        "providers": [{"id": "codex", "days": []}],
+                    }
+                ],
+            },
+            "themes": {
+                "all": {"title": "All", "titleCaption": "Total usage from", "colors": ["#1", "#2", "#3", "#4", "#5"]},
+                "codex": {"title": "Codex", "titleCaption": None, "colors": ["#1", "#2", "#3", "#4", "#5"]},
+            },
+            "ui": {"storageKey": "test", "export": {"endpoint": "/api/export", "format": "png"}},
+        }
+    )
+
+    assert "Export Data" in html_text
+    assert "Import Data" in html_text
 
 
 def test_static_header_metrics_align_to_calendar_right_edge():
