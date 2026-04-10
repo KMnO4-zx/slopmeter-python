@@ -11,7 +11,21 @@ Local usage heatmaps and a web viewer for AI coding tools.
 
 ## Install
 
-### Option 1: Run from this repo
+### Option 1: Install the published package from PyPI (recommended)
+
+Use this when you want to install the released version directly from PyPI. This is the easiest way to get started.
+
+```bash
+uv tool install slopmeter
+```
+
+Upgrade later with:
+
+```bash
+uv tool upgrade slopmeter
+```
+
+### Option 2: Run from this repo
 
 Use this when you are developing locally or just want to try the project from source.
 
@@ -25,7 +39,7 @@ Then run commands through `uv run`:
 uv run slopmeter
 ```
 
-### Option 2: Install the CLI into your current Python environment
+### Option 3: Install the CLI into your current Python environment
 
 Use this when you want the `slopmeter` command available inside an existing virtualenv.
 
@@ -33,29 +47,15 @@ Use this when you want the `slopmeter` command available inside an existing virt
 uv pip install .
 ```
 
-### Option 3: Install it as a standalone CLI tool
+### Option 4: Install it as a standalone CLI tool from source
 
-Use this when you want `slopmeter` available on your shell `PATH`.
+Use this when you want `slopmeter` available on your shell `PATH`, built from a local checkout.
 
 ```bash
 uv tool install .
 ```
 
 After installing with `uv pip install .` or `uv tool install .`, you can run `slopmeter` directly without `uv run`.
-
-### Option 4: Install the published package from PyPI
-
-Use this when you want to install the released version directly from PyPI.
-
-```bash
-uv tool install slopmeter
-```
-
-Upgrade later with:
-
-```bash
-uv tool upgrade slopmeter
-```
 
 ## Quick Start
 

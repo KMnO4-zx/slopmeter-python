@@ -10,7 +10,21 @@
 
 ## 安装
 
-### 方式 1：直接在仓库里运行
+### 方式 1：从 PyPI 安装已发布版本（推荐）
+
+适合你想直接安装 PyPI 上已经发布的正式版本，这也是最简单的上手方式。
+
+```bash
+uv tool install slopmeter
+```
+
+后续升级可以使用：
+
+```bash
+uv tool upgrade slopmeter
+```
+
+### 方式 2：直接在仓库里运行
 
 适合本地开发，或者你只是想从源码直接试用。
 
@@ -24,7 +38,7 @@ uv sync
 uv run slopmeter
 ```
 
-### 方式 2：安装到当前 Python 虚拟环境
+### 方式 3：安装到当前 Python 虚拟环境
 
 适合你想在当前 virtualenv 里直接使用 `slopmeter` 命令。
 
@@ -32,29 +46,15 @@ uv run slopmeter
 uv pip install .
 ```
 
-### 方式 3：安装成独立 CLI 工具
+### 方式 4：从源码安装为独立 CLI 工具
 
-适合你想把 `slopmeter` 直接放到 shell 的 `PATH` 里。
+适合你想把 `slopmeter` 直接放到 shell 的 `PATH` 里，并从本地代码构建。
 
 ```bash
 uv tool install .
 ```
 
 如果你使用 `uv pip install .` 或 `uv tool install .` 安装完成，之后就可以直接运行 `slopmeter`，不需要再写 `uv run`。
-
-### 方式 4：从 PyPI 安装已发布版本
-
-适合你想直接安装 PyPI 上已经发布的正式版本。
-
-```bash
-uv tool install slopmeter
-```
-
-后续升级可以使用：
-
-```bash
-uv tool upgrade slopmeter
-```
 
 ## 快速开始
 
