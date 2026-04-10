@@ -5,7 +5,7 @@ from datetime import datetime
 
 from ..models import ProviderId, UsageSummary
 from ..provider_meta import DEFAULT_PROVIDER_IDS, PROVIDER_IDS, PROVIDER_STATUS_LABEL
-from ..utils import has_usage, merge_usage_summaries
+from ..utils import has_usage, merge_usage_summaries, run_with_concurrency
 from .amp import is_amp_available, load_amp_rows
 from .claude import is_claude_available, load_claude_rows
 from .codex import is_codex_available, load_codex_rows
@@ -73,6 +73,34 @@ def merge_provider_usage(rows_by_provider: dict[ProviderId, UsageSummary | None]
     return merge_usage_summaries("all", summaries, end)
 
 
+def load_provider_usage(
+    provider: ProviderId,
+    *,
+    start: datetime,
+    end: datetime,
+) -> tuple[ProviderId, UsageSummary | None, list[str]]:
+    warnings: list[str] = []
+
+    if provider == "amp":
+        summary = load_amp_rows(start, end)
+    elif provider == "claude":
+        summary = load_claude_rows(start, end)
+    elif provider == "codex":
+        summary = load_codex_rows(start, end, warnings)
+    elif provider == "cursor":
+        summary = load_cursor_rows(start, end)
+    elif provider == "gemini":
+        summary = load_gemini_rows(start, end)
+    elif provider == "opencode":
+        summary = load_open_code_rows(start, end)
+    elif provider == "pi":
+        summary = load_pi_rows(start, end)
+    else:
+        raise ValueError(f"Unhandled provider: {provider}")
+
+    return provider, (summary if has_usage(summary) else None), warnings
+
+
 def aggregate_usage(
     *,
     start: datetime,
@@ -89,27 +117,16 @@ def aggregate_usage(
         "opencode": None,
         "pi": None,
     }
+    results = run_with_concurrency(
+        providers_to_load,
+        len(providers_to_load),
+        lambda provider, _: load_provider_usage(provider, start=start, end=end),
+    )
     warnings: list[str] = []
 
-    for provider in providers_to_load:
-        if provider == "amp":
-            summary = load_amp_rows(start, end)
-        elif provider == "claude":
-            summary = load_claude_rows(start, end)
-        elif provider == "codex":
-            summary = load_codex_rows(start, end, warnings)
-        elif provider == "cursor":
-            summary = load_cursor_rows(start, end)
-        elif provider == "gemini":
-            summary = load_gemini_rows(start, end)
-        elif provider == "opencode":
-            summary = load_open_code_rows(start, end)
-        elif provider == "pi":
-            summary = load_pi_rows(start, end)
-        else:
-            raise ValueError(f"Unhandled provider: {provider}")
-
-        rows_by_provider[provider] = summary if has_usage(summary) else None
+    for provider, summary, provider_warnings in results:
+        rows_by_provider[provider] = summary
+        warnings.extend(provider_warnings)
 
     return AggregateUsageResult(rows_by_provider=rows_by_provider, warnings=warnings)
 
