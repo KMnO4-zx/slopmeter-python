@@ -1,6 +1,6 @@
 [project]
 name = "slopmeter"
-version = "0.1.1"
+version = "0.1.2"
 description = "Local usage heatmaps and web viewer for AI coding tools."
 readme = "README.md"
 requires-python = ">=3.12"
