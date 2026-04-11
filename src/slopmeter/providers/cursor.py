@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import hashlib
 import io
 import json
 import os
@@ -23,6 +24,7 @@ from ..utils import (
     add_daily_token_totals,
     add_model_token_totals,
     create_usage_summary,
+    get_positive_integer_env,
     get_recent_window_start,
     normalize_model_name,
     parse_datetime,
@@ -31,14 +33,23 @@ from ..utils import (
 CURSOR_CONFIG_DIR_ENV = "CURSOR_CONFIG_DIR"
 CURSOR_STATE_DB_PATH_ENV = "CURSOR_STATE_DB_PATH"
 CURSOR_WEB_BASE_URL_ENV = "CURSOR_WEB_BASE_URL"
+CURSOR_CACHE_TTL_SECONDS_ENV = "SLOPMETER_CURSOR_CACHE_TTL_SECONDS"
 CURSOR_STATE_DB_RELATIVE_PATH = Path("User") / "globalStorage" / "state.vscdb"
 CURSOR_SESSION_COOKIE_NAME = "WorkosCursorSessionToken"
+DEFAULT_CURSOR_CACHE_TTL_SECONDS = 300
 
 
 @dataclass
 class CursorAuthState:
     access_token: str | None = None
     refresh_token: str | None = None
+
+
+@dataclass(frozen=True)
+class CursorFetchAttempt:
+    id: str
+    label: str
+    headers: dict[str, str]
 
 
 def get_cursor_default_state_db_path() -> Path:
@@ -169,26 +180,103 @@ def build_cookie_header_value(cookie_value: str) -> str:
     return f"{CURSOR_SESSION_COOKIE_NAME}={cookie_value}"
 
 
-def get_cursor_fetch_attempts(access_token: str) -> list[dict[str, object]]:
-    attempts: list[dict[str, object]] = []
+def get_cursor_cache_ttl_seconds() -> int:
+    raw = os.environ.get(CURSOR_CACHE_TTL_SECONDS_ENV, "").strip()
+    if raw == "0":
+        return 0
+    return get_positive_integer_env(CURSOR_CACHE_TTL_SECONDS_ENV, DEFAULT_CURSOR_CACHE_TTL_SECONDS)
+
+
+def get_slopmeter_cache_dir() -> Path:
+    xdg_cache_home = os.environ.get("XDG_CACHE_HOME", "").strip()
+    if xdg_cache_home:
+        return Path(xdg_cache_home).expanduser().resolve() / "slopmeter"
+    return Path.home() / ".cache" / "slopmeter"
+
+
+def get_cursor_usage_cache_path(access_token: str) -> Path:
+    key = hashlib.sha256(f"{get_cursor_web_base_url()}\n{access_token}".encode("utf-8")).hexdigest()
+    return get_slopmeter_cache_dir() / f"cursor-usage-{key}.csv"
+
+
+def get_cursor_auth_strategy_cache_path(subject: str | None) -> Path:
+    key = hashlib.sha256(f"{get_cursor_web_base_url()}\n{subject or ''}".encode("utf-8")).hexdigest()
+    return get_slopmeter_cache_dir() / f"cursor-auth-{key}.json"
+
+
+def read_preferred_cursor_fetch_attempt_id(subject: str | None) -> str | None:
+    cache_path = get_cursor_auth_strategy_cache_path(subject)
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    attempt_id = payload.get("attemptId")
+    return attempt_id if isinstance(attempt_id, str) and attempt_id.strip() else None
+
+
+def write_preferred_cursor_fetch_attempt_id(subject: str | None, attempt_id: str) -> None:
+    cache_path = get_cursor_auth_strategy_cache_path(subject)
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps({"attemptId": attempt_id}), encoding="utf-8")
+    except OSError:
+        return
+
+
+def read_cursor_usage_cache(access_token: str) -> str | None:
+    ttl_seconds = get_cursor_cache_ttl_seconds()
+    if ttl_seconds <= 0:
+        return None
+
+    cache_path = get_cursor_usage_cache_path(access_token)
+    try:
+        if not cache_path.exists():
+            return None
+        if (datetime.now().timestamp() - cache_path.stat().st_mtime) > ttl_seconds:
+            return None
+        return cache_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def write_cursor_usage_cache(access_token: str, content: str) -> None:
+    if get_cursor_cache_ttl_seconds() <= 0:
+        return
+
+    cache_path = get_cursor_usage_cache_path(access_token)
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(content, encoding="utf-8")
+    except OSError:
+        return
+
+
+def get_cursor_fetch_attempts(access_token: str) -> list[CursorFetchAttempt]:
+    attempts: list[CursorFetchAttempt] = []
     seen: set[str] = set()
     subject = ((decode_jwt_payload(access_token) or {}).get("sub") or "").strip()
     cookie_values = [access_token]
     if subject:
         cookie_values.append(f"{subject}::{access_token}")
 
-    def push_attempt(label: str, headers: dict[str, str]) -> None:
-        signature = json.dumps({"label": label, "headers": sorted(headers.items())})
+    def push_attempt(attempt_id: str, label: str, headers: dict[str, str]) -> None:
+        signature = json.dumps({"id": attempt_id, "headers": sorted(headers.items())})
         if signature in seen:
             return
         seen.add(signature)
-        attempts.append({"label": label, "headers": headers})
+        attempts.append(CursorFetchAttempt(id=attempt_id, label=label, headers=headers))
 
-    push_attempt("bearer", {"Authorization": f"Bearer {access_token}"})
-    for cookie_value in cookie_values:
-        push_attempt("cookie", {"Cookie": build_cookie_header_value(cookie_value)})
-        push_attempt("cookie-encoded", {"Cookie": build_cookie_header_value(urllib.parse.quote(cookie_value))})
+    push_attempt("bearer", "bearer", {"Authorization": f"Bearer {access_token}"})
+    for index, cookie_value in enumerate(cookie_values):
+        suffix = "" if index == 0 else "-subject"
+        push_attempt(f"cookie{suffix}", "cookie", {"Cookie": build_cookie_header_value(cookie_value)})
         push_attempt(
+            f"cookie-encoded{suffix}",
+            "cookie-encoded",
+            {"Cookie": build_cookie_header_value(urllib.parse.quote(cookie_value))},
+        )
+        push_attempt(
+            f"bearer+cookie{suffix}",
             "bearer+cookie",
             {
                 "Authorization": f"Bearer {access_token}",
@@ -196,6 +284,7 @@ def get_cursor_fetch_attempts(access_token: str) -> list[dict[str, object]]:
             },
         )
         push_attempt(
+            f"bearer+cookie-encoded{suffix}",
             "bearer+cookie-encoded",
             {
                 "Authorization": f"Bearer {access_token}",
@@ -205,22 +294,42 @@ def get_cursor_fetch_attempts(access_token: str) -> list[dict[str, object]]:
     return attempts
 
 
+def prioritize_cursor_fetch_attempts(
+    attempts: list[CursorFetchAttempt],
+    preferred_attempt_id: str | None,
+) -> list[CursorFetchAttempt]:
+    if not preferred_attempt_id:
+        return attempts
+    return sorted(attempts, key=lambda attempt: attempt.id != preferred_attempt_id)
+
+
 def fetch_cursor_usage_csv(access_token: str) -> str:
+    cached_content = read_cursor_usage_cache(access_token)
+    if cached_content is not None:
+        return cached_content
+
+    subject = ((decode_jwt_payload(access_token) or {}).get("sub") or "").strip() or None
+    attempts = prioritize_cursor_fetch_attempts(
+        get_cursor_fetch_attempts(access_token),
+        read_preferred_cursor_fetch_attempt_id(subject),
+    )
     url = f"{get_cursor_web_base_url()}/api/dashboard/export-usage-events-csv?strategy=tokens"
     failures: list[str] = []
     with httpx.Client(follow_redirects=True, timeout=60.0) as client:
-        for attempt in get_cursor_fetch_attempts(access_token):
+        for attempt in attempts:
             response = client.get(
                 url,
                 headers={
                     "Accept": "text/csv,text/plain;q=0.9,*/*;q=0.8",
-                    **attempt["headers"],
+                    **attempt.headers,
                 },
             )
             if response.is_success:
+                write_preferred_cursor_fetch_attempt_id(subject, attempt.id)
+                write_cursor_usage_cache(access_token, response.text)
                 return response.text
             body = response.text.strip()[:200]
-            status_line = f'{attempt["label"]}: {response.status_code} {response.reason_phrase}'.strip()
+            status_line = f"{attempt.label}: {response.status_code} {response.reason_phrase}".strip()
             failures.append(f"{status_line} ({body})" if body else status_line)
 
     summary = "; ".join(failures)
@@ -332,4 +441,3 @@ def load_cursor_rows(start: datetime, end: datetime) -> UsageSummary:
     recent_start = get_recent_window_start(end, 30)
     content = fetch_cursor_usage_csv(auth_state.access_token)
     return summarize_cursor_usage_csv_text(content, start, end, recent_start)
-

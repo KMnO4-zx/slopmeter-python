@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from time import perf_counter
 
 from ..models import ProviderId, UsageSummary
 from ..provider_meta import DEFAULT_PROVIDER_IDS, PROVIDER_IDS, PROVIDER_STATUS_LABEL
@@ -19,6 +20,7 @@ from .pi import is_pi_available, load_pi_rows
 class AggregateUsageResult:
     rows_by_provider: dict[ProviderId, UsageSummary | None]
     warnings: list[str]
+    elapsed_by_provider: dict[ProviderId, float]
 
 
 ProviderAvailability = dict[ProviderId, bool]
@@ -78,8 +80,9 @@ def load_provider_usage(
     *,
     start: datetime,
     end: datetime,
-) -> tuple[ProviderId, UsageSummary | None, list[str]]:
+) -> tuple[ProviderId, UsageSummary | None, list[str], float]:
     warnings: list[str] = []
+    started_at = perf_counter()
 
     if provider == "amp":
         summary = load_amp_rows(start, end)
@@ -98,7 +101,8 @@ def load_provider_usage(
     else:
         raise ValueError(f"Unhandled provider: {provider}")
 
-    return provider, (summary if has_usage(summary) else None), warnings
+    elapsed = perf_counter() - started_at
+    return provider, (summary if has_usage(summary) else None), warnings, elapsed
 
 
 def aggregate_usage(
@@ -107,7 +111,7 @@ def aggregate_usage(
     end: datetime,
     requested_providers: list[ProviderId] | None = None,
 ) -> AggregateUsageResult:
-    providers_to_load = requested_providers or PROVIDER_IDS
+    providers_to_load = PROVIDER_IDS if requested_providers is None else requested_providers
     rows_by_provider: dict[ProviderId, UsageSummary | None] = {
         "amp": None,
         "claude": None,
@@ -117,6 +121,7 @@ def aggregate_usage(
         "opencode": None,
         "pi": None,
     }
+    elapsed_by_provider: dict[ProviderId, float] = {}
     results = run_with_concurrency(
         providers_to_load,
         len(providers_to_load),
@@ -124,11 +129,16 @@ def aggregate_usage(
     )
     warnings: list[str] = []
 
-    for provider, summary, provider_warnings in results:
+    for provider, summary, provider_warnings, elapsed in results:
         rows_by_provider[provider] = summary
         warnings.extend(provider_warnings)
+        elapsed_by_provider[provider] = elapsed
 
-    return AggregateUsageResult(rows_by_provider=rows_by_provider, warnings=warnings)
+    return AggregateUsageResult(
+        rows_by_provider=rows_by_provider,
+        warnings=warnings,
+        elapsed_by_provider=elapsed_by_provider,
+    )
 
 
 __all__ = [
