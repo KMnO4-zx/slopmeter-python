@@ -173,15 +173,19 @@ def list_files_recursive(root_dir: Path, extension: str) -> list[Path]:
     while stack:
         current_dir = stack.pop()
         try:
-            entries = list(current_dir.iterdir())
+            with os.scandir(current_dir) as iterator:
+                entries = list(iterator)
         except OSError:
             continue
 
         for entry in entries:
-            if entry.is_dir():
-                stack.append(entry)
-            elif entry.is_file() and str(entry).endswith(extension):
-                files.append(entry)
+            try:
+                if entry.is_dir():
+                    stack.append(Path(entry.path))
+                elif entry.is_file() and entry.name.endswith(extension):
+                    files.append(Path(entry.path))
+            except OSError:
+                continue
 
     return sorted(files)
 
@@ -666,4 +670,3 @@ def parse_datetime(value: Any) -> datetime | None:
 
 def ensure_within_range(value: datetime | None, start: datetime, end: datetime) -> bool:
     return value is not None and start <= value <= end
-

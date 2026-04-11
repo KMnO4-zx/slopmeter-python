@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Literal, cast
 
 import typer
@@ -73,6 +74,20 @@ def infer_format(format_arg: str | None, output_arg: str | None) -> str:
             return suffix[1:]
 
     return "png"
+
+
+def format_elapsed_time(seconds: float) -> str:
+    if seconds < 1:
+        return f"{seconds * 1000:.0f}ms"
+    return f"{seconds:.2f}s"
+
+
+def format_provider_timing_breakdown(elapsed_by_provider: dict[ProviderId, float]) -> str:
+    ordered = sorted(elapsed_by_provider.items(), key=lambda item: item[1], reverse=True)
+    return ", ".join(
+        f"{PROVIDER_STATUS_LABEL[provider]} {format_elapsed_time(elapsed)}"
+        for provider, elapsed in ordered
+    )
 
 
 def get_date_window() -> tuple[datetime, datetime]:
@@ -411,6 +426,10 @@ def build_export_payload(
 
 
 def analyze_usage(values: CliArgValues, *, selection_mode: SelectionMode) -> AnalysisBundle:
+    status_started_at = perf_counter()
+    availability_elapsed = 0.0
+    aggregate_elapsed = 0.0
+
     with stdout.status("Analyzing usage data..."):
         start, end = get_date_window()
         color_mode: ColorMode = "dark" if values.dark else "light"
@@ -428,16 +447,37 @@ def analyze_usage(values: CliArgValues, *, selection_mode: SelectionMode) -> Ana
             requested_providers = list(PROVIDER_IDS) if values.all else get_requested_providers(values)
             inspected_providers = requested_providers if requested_providers else list(PROVIDER_IDS)
 
+        availability_started_at = perf_counter()
         availability_by_provider = get_provider_availability(inspected_providers)
+        availability_elapsed = perf_counter() - availability_started_at
+
+        aggregate_providers = [
+            provider
+            for provider in (requested_providers or inspected_providers)
+            if availability_by_provider.get(provider, False)
+        ]
+        aggregate_started_at = perf_counter()
         aggregate_result = aggregate_usage(
             start=start,
             end=end,
-            requested_providers=requested_providers,
+            requested_providers=aggregate_providers,
         )
+        aggregate_elapsed = perf_counter() - aggregate_started_at
+
+    status_elapsed = perf_counter() - status_started_at
 
     for warning in aggregate_result.warnings:
         stderr.print(warning)
 
+    stdout.print(
+        "Analysis timing: "
+        f"total {format_elapsed_time(status_elapsed)} "
+        f"(availability {format_elapsed_time(availability_elapsed)}, "
+        f"aggregate {format_elapsed_time(aggregate_elapsed)})"
+    )
+    provider_timing = format_provider_timing_breakdown(getattr(aggregate_result, "elapsed_by_provider", {}))
+    if provider_timing:
+        stdout.print(f"Aggregate provider timing: {provider_timing}")
     print_provider_availability(availability_by_provider, inspected_providers)
     export_providers = get_output_providers(
         values,

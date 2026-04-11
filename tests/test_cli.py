@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -238,6 +239,61 @@ def test_service_default_payload_includes_all_then_available_providers(monkeypat
         "codex",
         "opencode",
     ]
+
+
+def test_analyze_usage_prints_timing_breakdown(monkeypatch):
+    now = datetime.now()
+    printed: list[str] = []
+
+    monkeypatch.setattr("slopmeter.cli.get_date_window", lambda: (now - timedelta(days=1), now))
+    monkeypatch.setattr("slopmeter.cli.get_provider_availability", lambda providers: {"codex": True})
+    monkeypatch.setattr(
+        "slopmeter.cli.aggregate_usage",
+        lambda *, start, end, requested_providers: SimpleNamespace(
+            warnings=[],
+            rows_by_provider={},
+            elapsed_by_provider={"codex": 1.5, "claude": 0.3},
+        ),
+    )
+    monkeypatch.setattr("slopmeter.cli.get_output_providers", lambda *args, **kwargs: [])
+    monkeypatch.setattr("slopmeter.cli.build_export_payload", lambda *args, **kwargs: {"providers": []})
+    monkeypatch.setattr("slopmeter.cli.print_provider_availability", lambda *args, **kwargs: None)
+    monkeypatch.setattr("slopmeter.cli.stdout.status", lambda message: nullcontext())
+    monkeypatch.setattr("slopmeter.cli.stdout.print", lambda message: printed.append(str(message)))
+
+    perf_values = iter([10.0, 10.1, 10.4, 10.5, 12.0, 12.4])
+    monkeypatch.setattr("slopmeter.cli.perf_counter", lambda: next(perf_values))
+
+    analyze_usage(build_cli_values(codex=True), selection_mode="export")
+
+    assert "Analysis timing: total 2.40s (availability 300ms, aggregate 1.50s)" in printed
+    assert "Aggregate provider timing: Codex 1.50s, Claude code 300ms" in printed
+
+
+def test_analyze_usage_only_aggregates_available_providers(monkeypatch):
+    now = datetime.now()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr("slopmeter.cli.get_date_window", lambda: (now - timedelta(days=1), now))
+    monkeypatch.setattr(
+        "slopmeter.cli.get_provider_availability",
+        lambda providers: {"codex": True, "claude": False},
+    )
+
+    def fake_aggregate_usage(*, start, end, requested_providers):
+        captured["requested_providers"] = requested_providers
+        return SimpleNamespace(warnings=[], rows_by_provider={}, elapsed_by_provider={})
+
+    monkeypatch.setattr("slopmeter.cli.aggregate_usage", fake_aggregate_usage)
+    monkeypatch.setattr("slopmeter.cli.get_output_providers", lambda *args, **kwargs: [])
+    monkeypatch.setattr("slopmeter.cli.build_export_payload", lambda *args, **kwargs: {"providers": []})
+    monkeypatch.setattr("slopmeter.cli.print_provider_availability", lambda *args, **kwargs: None)
+    monkeypatch.setattr("slopmeter.cli.stdout.status", lambda message: nullcontext())
+    monkeypatch.setattr("slopmeter.cli.stdout.print", lambda message: None)
+
+    analyze_usage(build_cli_values(codex=True, claude=True), selection_mode="export")
+
+    assert captured["requested_providers"] == ["codex"]
 
 
 def test_codex_json_export_from_cumulative_totals(tmp_path: Path):
