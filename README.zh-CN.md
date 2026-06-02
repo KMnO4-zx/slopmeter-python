@@ -1,6 +1,6 @@
 # slopmeter
 
-![Example heatmap](https://raw.githubusercontent.com/KMnO4-zx/slopmeter-python/master/images/slopmeter_all.png)
+![Example heatmap](https://raw.githubusercontent.com/KMnO4-zx/slopmeter-python/master/images/slopmeter_2026-06-02_all_codex_claude.png)
 
 <p align="center">
   <a href="https://github.com/KMnO4-zx/slopmeter-python/blob/master/README.md">English</a> | <a href="https://github.com/KMnO4-zx/slopmeter-python/blob/master/README.zh-CN.md">简体中文</a>
