@@ -56,8 +56,8 @@ def as_non_empty_string(value: object) -> str | None:
 def create_pi_token_totals(usage: dict[str, object]) -> TokenTotals:
     cache_read = int(usage.get("cacheRead", 0) or 0)
     cache_write = int(usage.get("cacheWrite", 0) or 0)
-    input_tokens = int(usage.get("input", 0) or 0) + cache_read
-    output_tokens = int(usage.get("output", 0) or 0) + cache_write
+    input_tokens = int(usage.get("input", 0) or 0) + cache_read + cache_write
+    output_tokens = int(usage.get("output", 0) or 0)
     total_tokens = int(usage.get("totalTokens", 0) or 0) or input_tokens + output_tokens
     return TokenTotals(
         input=input_tokens,
@@ -126,4 +126,3 @@ def load_pi_rows(start: datetime, end: datetime) -> UsageSummary:
                 add_model_token_totals(recent_model_totals, normalized_model_name, token_totals)
 
     return create_usage_summary("pi", totals, model_totals, recent_model_totals, end)
-

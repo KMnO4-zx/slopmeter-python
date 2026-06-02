@@ -138,8 +138,8 @@ def parse_claude_log_entry(entry: dict[str, object]) -> dict[str, object] | None
 def create_claude_token_totals(usage: dict[str, object]) -> TokenTotals:
     cache_read_input = int(usage.get("cache_read_input_tokens", 0) or 0)
     cache_creation_input = int(usage.get("cache_creation_input_tokens", 0) or 0)
-    input_tokens = int(usage.get("input_tokens", 0) or 0) + cache_read_input
-    output_tokens = int(usage.get("output_tokens", 0) or 0) + cache_creation_input
+    input_tokens = int(usage.get("input_tokens", 0) or 0) + cache_read_input + cache_creation_input
+    output_tokens = int(usage.get("output_tokens", 0) or 0)
     return TokenTotals(
         input=input_tokens,
         output=output_tokens,
@@ -200,8 +200,8 @@ def create_stats_cache_token_totals(total_tokens: int, usage: dict[str, object] 
         return TokenTotals(input=total_tokens, total=total_tokens)
 
     return TokenTotals(
-        input=scaled_input + scaled_cache_read,
-        output=scaled_output + scaled_cache_creation,
+        input=scaled_input + scaled_cache_read + scaled_cache_creation,
+        output=scaled_output,
         cache=CacheTokens(input=scaled_cache_read, output=scaled_cache_creation),
         total=total_tokens,
     )
@@ -349,4 +349,3 @@ def load_claude_rows(start_date: datetime, end_date: datetime) -> UsageSummary:
         end_date,
         display_values_by_date,
     )
-

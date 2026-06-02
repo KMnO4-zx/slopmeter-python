@@ -50,8 +50,8 @@ def is_amp_available() -> bool:
 def create_amp_token_totals(usage: dict[str, object]) -> TokenTotals:
     cache_read_input = int(usage.get("cacheReadInputTokens", 0) or 0)
     cache_creation_input = int(usage.get("cacheCreationInputTokens", 0) or 0)
-    input_tokens = int(usage.get("inputTokens", 0) or 0) + cache_read_input
-    output_tokens = int(usage.get("outputTokens", 0) or 0) + cache_creation_input
+    input_tokens = int(usage.get("inputTokens", 0) or 0) + cache_read_input + cache_creation_input
+    output_tokens = int(usage.get("outputTokens", 0) or 0)
     return TokenTotals(
         input=input_tokens,
         output=output_tokens,
@@ -134,4 +134,3 @@ def load_amp_rows(start: datetime, end: datetime) -> UsageSummary:
         merge_model_totals(recent_model_totals, result_recent_model_totals)
 
     return create_usage_summary("amp", totals, model_totals, recent_model_totals, end)
-

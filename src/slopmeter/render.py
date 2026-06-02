@@ -661,13 +661,13 @@ def draw_heatmap_section(
         BASE_NOTE_TEXT_OFFSET, layout.scale
     )
 
-    if total_cost_label and pricing_model_name:
+    if total_cost_label:
         cost_font_size = int(round(layout.note_font_size * 1.2))
         add_text(
             scene,
             x=note_x,
             y=next_note_y,
-            text=f"Estimated cost (priced as {pricing_model_name}): {total_cost_label}",
+            text=f"Estimated cost: {total_cost_label}",
             fill=palette.text,
             font_size=cost_font_size,
             font_weight=700,
@@ -1462,12 +1462,12 @@ def render_html_document(payload: dict[str, Any]) -> str:
         return Math.min(Math.max(Math.ceil(scaled * (colorCount - 1)), 0), colorCount - 1);
       }}
 
-      function showTooltip(event, day, row, pricingModel) {{
+      function showTooltip(event, day, row) {{
         const breakdown = (row.breakdown || []).slice(0, 3).map((item) =>
           `<div class="tooltip-line">${{item.name}}: ${{formatTokenTotal(item.tokens.total)}}</div>`
         ).join("");
         const costLine = typeof row.costUsd === "number" && row.costUsd > 0
-          ? `<div class="tooltip-line">Est. cost: ${{formatCost(row.costUsd)}}${{pricingModel ? ` (priced as ${{pricingModel}})` : ""}}</div>`
+          ? `<div class="tooltip-line">Est. cost: ${{formatCost(row.costUsd)}}</div>`
           : "";
         tooltip.innerHTML = `
           <div class="tooltip-title">${{formatTooltipDate(day)}}</div>
@@ -1786,6 +1786,14 @@ def render_html_document(payload: dict[str, Any]) -> str:
         updateToolbarStatus();
       }}
 
+      function formatTodayForFilename() {{
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, "0");
+        const day = String(now.getDate()).padStart(2, "0");
+        return `${{year}}-${{month}}-${{day}}`;
+      }}
+
       async function exportSelection() {{
         if (!exportConfig) return;
         const providerIds = getSelectedProviderIds();
@@ -1821,7 +1829,7 @@ def render_html_document(payload: dict[str, Any]) -> str:
 
           const blob = await response.blob();
           const filename = getFilenameFromHeader(response.headers.get("Content-Disposition"))
-            || `slopmeter_${{providerIds.join("_")}}.png`;
+            || `slopmeter_${{formatTodayForFilename()}}_${{providerIds.join("_")}}.png`;
           downloadBlob(blob, filename);
           updateToolbarStatus(`Exported ${{providerIds.length}} provider${{providerIds.length === 1 ? "" : "s"}} to ${{filename}}.`);
         }} catch (error) {{
@@ -2003,7 +2011,7 @@ def render_html_document(payload: dict[str, Any]) -> str:
             button.style.gridRow = String(dayIndex + 2);
             button.style.background = fill;
             button.setAttribute("aria-label", `${{day}}: ${{row.total}} total tokens`);
-            button.addEventListener("mouseenter", (event) => showTooltip(event, day, row, provider.pricingModel));
+            button.addEventListener("mouseenter", (event) => showTooltip(event, day, row));
             button.addEventListener("mousemove", moveTooltip);
             button.addEventListener("mouseleave", hideTooltip);
             calendarGrid.appendChild(button);
@@ -2027,10 +2035,10 @@ def render_html_document(payload: dict[str, Any]) -> str:
         legend.appendChild(more);
         shell.appendChild(legend);
 
-        if (provider.totalCostLabel && provider.pricingModel) {{
+        if (provider.totalCostLabel) {{
           const costNote = document.createElement("div");
           costNote.className = "note cost-note";
-          const costPrefix = document.createTextNode(`Estimated cost (priced as ${{provider.pricingModel}}): `);
+          const costPrefix = document.createTextNode("Estimated cost: ");
           const costAmount = document.createElement("span");
           costAmount.className = "cost-amount";
           costAmount.textContent = provider.totalCostLabel;

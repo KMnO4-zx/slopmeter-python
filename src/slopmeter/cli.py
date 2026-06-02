@@ -382,7 +382,7 @@ def build_render_sections(
         theme = HEATMAP_THEMES[theme_key]
         title = get_merged_provider_title(rows_by_provider) if provider.provider == "all" else theme.title
         pricing = select_pricing_model(provider)
-        total_cost = compute_summary_cost(provider, pricing)
+        total_cost = compute_summary_cost(provider)
         sections.append(
             RenderSection(
                 daily=provider.daily,
@@ -562,6 +562,10 @@ def build_service_payload(payload: dict[str, object]) -> dict[str, object]:
     return service_payload
 
 
+def get_service_png_filename(provider_ids: list[str], end: datetime) -> str:
+    return f"slopmeter_{format_local_date(end)}_{'_'.join(provider_ids)}.png"
+
+
 def build_service_png_export(
     bundle: AnalysisBundle,
     provider_ids: list[str],
@@ -579,7 +583,7 @@ def build_service_png_export(
         sections=sections,
         color_mode=bundle.color_mode,
     )
-    return png_bytes, f"slopmeter_{'_'.join(normalized_provider_ids)}.png"
+    return png_bytes, get_service_png_filename(normalized_provider_ids, bundle.end)
 
 
 def run_serve(

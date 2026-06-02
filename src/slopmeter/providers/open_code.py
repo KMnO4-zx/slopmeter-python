@@ -30,8 +30,8 @@ def sum_open_code_tokens(tokens: dict[str, object] | None) -> TokenTotals:
     cache = tokens.get("cache") or {}
     cache_input = int((cache or {}).get("read", 0) or 0)
     cache_output = int((cache or {}).get("write", 0) or 0)
-    input_tokens = int(tokens.get("input", 0) or 0) + cache_input
-    output_tokens = int(tokens.get("output", 0) or 0) + cache_output
+    input_tokens = int(tokens.get("input", 0) or 0) + cache_input + cache_output
+    output_tokens = int(tokens.get("output", 0) or 0)
     return TokenTotals(
         input=input_tokens,
         output=output_tokens,
@@ -187,4 +187,3 @@ def load_open_code_rows(start: datetime, end: datetime) -> UsageSummary:
                 )
 
     return create_usage_summary("opencode", totals, model_totals, recent_model_totals, end)
-

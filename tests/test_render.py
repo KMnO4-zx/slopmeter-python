@@ -89,8 +89,7 @@ def test_scene_includes_cost_line_when_label_set():
     cost_nodes = [
         node
         for node in scene.nodes
-        if isinstance(node, TextNode)
-        and "Estimated cost (priced as gpt-5.4): $10" in node.text
+        if isinstance(node, TextNode) and "Estimated cost: $10" in node.text
     ]
     assert len(cost_nodes) == 1
 
@@ -111,7 +110,7 @@ def test_scene_omits_cost_line_when_label_none():
     )
 
 
-def test_cost_line_requires_both_label_and_model_name():
+def test_cost_line_requires_label_only():
     now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     section = _build_section(total_cost_label="$10", pricing_model_name=None)
 
@@ -122,6 +121,7 @@ def test_cost_line_requires_both_label_and_model_name():
         color_mode="light",
     )
 
-    assert not any(
-        isinstance(node, TextNode) and "Estimated cost" in node.text for node in scene.nodes
+    assert any(
+        isinstance(node, TextNode) and "Estimated cost: $10" in node.text
+        for node in scene.nodes
     )

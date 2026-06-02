@@ -482,7 +482,7 @@ def get_recent_window_start(end_date: datetime, days: int = 30) -> datetime:
 
 
 def normalize_model_name(model_name: str) -> str:
-    return re.sub(r"-\d{8}$", "", model_name)
+    return re.sub(r"-(?:\d{8}|\d{4}-\d{2}-\d{2})$", "", model_name)
 
 
 def get_top_model(model_totals: ModelTotals) -> ModelUsage | None:

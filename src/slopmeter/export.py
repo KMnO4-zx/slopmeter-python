@@ -4,13 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from .models import DailyUsage, Insights, JsonProviderSummary, ModelUsage, TokenTotals, UsageSummary
-from .pricing import (
-    ModelPricing,
-    compute_daily_cost,
-    compute_summary_cost,
-    format_cost,
-    select_pricing_model,
-)
+from .pricing import compute_daily_cost, compute_summary_cost, format_cost, select_pricing_model
 from .utils import format_local_date
 
 JSON_EXPORT_VERSION = "2026-04-10"
@@ -53,7 +47,7 @@ def insights_to_dict(value: Insights | None) -> dict[str, Any] | None:
     }
 
 
-def daily_usage_to_dict(value: DailyUsage, *, pricing: ModelPricing) -> dict[str, Any]:
+def daily_usage_to_dict(value: DailyUsage) -> dict[str, Any]:
     payload = {
         "date": format_local_date(value.date),
         "input": value.input,
@@ -64,7 +58,7 @@ def daily_usage_to_dict(value: DailyUsage, *, pricing: ModelPricing) -> dict[str
         },
         "total": value.total,
         "breakdown": [model_usage_to_dict(item) for item in value.breakdown],
-        "costUsd": round(compute_daily_cost(value, pricing), 4),
+        "costUsd": round(compute_daily_cost(value), 4),
     }
     if value.display_value is not None:
         payload["displayValue"] = value.display_value
@@ -78,13 +72,13 @@ def to_json_provider_summary(
     colors: list[str],
 ) -> JsonProviderSummary:
     pricing = select_pricing_model(summary)
-    total_cost = compute_summary_cost(summary, pricing)
+    total_cost = compute_summary_cost(summary)
     return JsonProviderSummary(
         provider=summary.provider,
         id=summary.provider,
         title=title,
         colors=colors,
-        daily=[daily_usage_to_dict(row, pricing=pricing) for row in summary.daily],
+        daily=[daily_usage_to_dict(row) for row in summary.daily],
         insights=insights_to_dict(summary.insights),
         pricing_model=pricing.display_name,
         pricing_model_key=pricing.key,
@@ -121,4 +115,3 @@ def build_json_export(
             for provider in providers
         ],
     }
-

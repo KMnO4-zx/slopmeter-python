@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from typer.testing import CliRunner
 
-from slopmeter.cli import analyze_usage, app, build_cli_values, run_serve
+from slopmeter.cli import analyze_usage, app, build_cli_values, get_service_png_filename, run_serve
 from slopmeter.models import CacheTokens, DailyUsage
 from slopmeter.providers.cursor import summarize_cursor_usage_csv_text
 from slopmeter.render import (
@@ -206,6 +206,11 @@ def test_run_serve_prints_final_url(monkeypatch, capsys):
     assert "Stopping slopmeter" in captured.out
 
 
+def test_service_png_filename_includes_export_date():
+    filename = get_service_png_filename(["all", "codex"], datetime(2026, 6, 2, 23, 59, 59))
+    assert filename == "slopmeter_2026-06-02_all_codex.png"
+
+
 def test_service_default_payload_includes_all_then_available_providers(monkeypatch, tmp_path: Path):
     codex_home = tmp_path / "codex"
     open_code_dir = tmp_path / "opencode"
@@ -339,13 +344,13 @@ def test_codex_json_export_from_cumulative_totals(tmp_path: Path):
     assert payload["providers"][0]["provider"] == "codex"
     assert payload["providers"][0]["daily"][0]["total"] == 130
     assert payload["providers"][0]["daily"][0]["breakdown"][0]["name"] == "gpt-5.2"
-    # gpt-5.2 is not a reference model → default fallback to claude-opus-4-6
+    # Unknown models should not be silently priced as a different reference model.
     assert payload["version"] == "2026-04-10"
-    assert payload["providers"][0]["pricingModelKey"] == "claude-opus-4-6"
-    assert payload["providers"][0]["pricingModel"] == "claude-opus-4-6"
-    assert payload["providers"][0]["totalCostUsd"] > 0
-    assert payload["providers"][0]["totalCostLabel"].startswith("$")
-    assert "costUsd" in payload["providers"][0]["daily"][0]
+    assert payload["providers"][0]["pricingModelKey"] == "unpriced-models"
+    assert payload["providers"][0]["pricingModel"] == "unpriced models"
+    assert payload["providers"][0]["totalCostUsd"] == 0
+    assert payload["providers"][0]["totalCostLabel"] == ""
+    assert payload["providers"][0]["daily"][0]["costUsd"] == 0
 
 
 def test_claude_history_fallback_emits_activity_only_days(tmp_path: Path):
@@ -720,6 +725,8 @@ def test_html_svg_and_png_exports_are_generated(tmp_path: Path):
     assert "current.setUTCDate(current.getUTCDate() + 1);" in html_text
     assert 'addEventListener("pointerdown"' in html_text
     assert "function movePlaceholderToPointer(clientY)" in html_text
+    assert "function formatTodayForFilename()" in html_text
+    assert 'slopmeter_${formatTodayForFilename()}_${providerIds.join("_")}.png' in html_text
     assert "provider-placeholder" in html_text
     assert 'setAttribute("draggable", "true")' not in html_text
     assert 'addEventListener("dragstart"' not in html_text
@@ -727,11 +734,10 @@ def test_html_svg_and_png_exports_are_generated(tmp_path: Path):
     assert "toISOString().slice(0, 10)" not in html_text
     # Cost estimation wiring
     assert "function formatCost(" in html_text
-    assert "Estimated cost (priced as" in html_text
+    assert "Estimated cost: " in html_text
     assert "row.costUsd" in html_text
     assert "Est. cost:" in html_text
-    assert "priced as ${pricingModel}" in html_text
-    assert "provider.pricingModel" in html_text
+    assert "priced as" not in html_text
     assert svg_path.read_text(encoding="utf-8").startswith("<svg")
     assert png_path.stat().st_size > 0
 
