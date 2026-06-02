@@ -151,6 +151,19 @@ def test_china_provider_catalog_prices_are_cny():
             assert entry["source_currency"] == "CNY", (group, model_key)
 
 
+def test_minimax_m3_uses_full_price_not_limited_discount():
+    raw_price = MODEL_PRICES["minimax-m3"]
+    assert raw_price["source_currency"] == "CNY"
+    assert raw_price["input_per_million"] == pytest.approx(4.20)
+    assert raw_price["cached_input_per_million"] == pytest.approx(0.84)
+    assert raw_price["output_per_million"] == pytest.approx(16.80)
+
+    pricing = PRICING_TABLE["minimax-m3"]
+    assert pricing.input_per_million == pytest.approx(4.20 * USD_PER_CNY)
+    assert pricing.cached_input_per_million == pytest.approx(0.84 * USD_PER_CNY)
+    assert pricing.output_per_million == pytest.approx(16.80 * USD_PER_CNY)
+
+
 def test_deepseek_v4_pro_pricing_is_available():
     raw_price = MODEL_PRICES["deepseek-v4-pro"]
     assert raw_price["source_currency"] == "CNY"

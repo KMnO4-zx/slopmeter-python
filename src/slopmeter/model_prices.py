@@ -266,16 +266,16 @@ DEEPSEEK_MODEL_PRICES: dict[str, dict[str, object]] = {
 
 
 MINIMAX_MODEL_PRICES: dict[str, dict[str, object]] = {
-    # MiniMax API pay-as-you-go. M3 standard uses the currently listed
-    # 7-day 50% off China mainland price for <=512k input tokens.
+    # MiniMax API pay-as-you-go. M3 standard uses the full China mainland
+    # price for <=512k input tokens, ignoring limited-time discounts.
     "minimax-m3": {
         "display_name": "MiniMax-M3",
         "provider": "minimax",
         "source_currency": "CNY",
-        "input_per_million": 2.10,
-        "cached_input_per_million": 0.42,
-        "cache_write_per_million": 2.10,
-        "output_per_million": 8.40,
+        "input_per_million": 4.20,
+        "cached_input_per_million": 0.84,
+        "cache_write_per_million": 4.20,
+        "output_per_million": 16.80,
         "source": "https://platform.minimaxi.com/docs/guides/pricing-paygo",
     },
     "minimax-m3-long": {
