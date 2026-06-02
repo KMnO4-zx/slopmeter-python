@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
+import pytest
+
 from slopmeter.providers.cursor import fetch_cursor_usage_csv
+from slopmeter.providers.cursor import CursorAuthState, CursorUsageExportAuthError, load_cursor_rows
 
 
 class DummyResponse:
@@ -99,3 +104,42 @@ def test_fetch_cursor_usage_csv_remembers_successful_auth_attempt(monkeypatch, t
     assert calls[0]["cookie"] == ""
     assert calls[1]["cookie"] == "WorkosCursorSessionToken=token-123"
     assert calls[2]["cookie"] == "WorkosCursorSessionToken=token-123"
+
+
+def test_fetch_cursor_usage_csv_marks_auth_failure(monkeypatch, tmp_path):
+    calls: list[dict[str, str]] = []
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / ".cache"))
+    monkeypatch.setenv("SLOPMETER_CURSOR_CACHE_TTL_SECONDS", "0")
+    monkeypatch.setattr(
+        "slopmeter.providers.cursor.httpx.Client",
+        lambda **kwargs: DummyClient(
+            calls,
+            "forbidden",
+            response_factory=lambda _url, _headers: DummyResponse("forbidden", is_success=False),
+        ),
+    )
+
+    with pytest.raises(CursorUsageExportAuthError):
+        fetch_cursor_usage_csv("token-123")
+
+
+def test_load_cursor_rows_skips_expired_local_auth(monkeypatch, tmp_path):
+    def reject_export(_access_token: str) -> str:
+        raise CursorUsageExportAuthError("expired Cursor auth")
+
+    monkeypatch.setattr("slopmeter.providers.cursor.get_cursor_state_db_path", lambda: tmp_path / "state.vscdb")
+    monkeypatch.setattr(
+        "slopmeter.providers.cursor.read_cursor_auth_state",
+        lambda _database_path: CursorAuthState(access_token="token-123"),
+    )
+    monkeypatch.setattr("slopmeter.providers.cursor.fetch_cursor_usage_csv", reject_export)
+
+    end = datetime.now()
+    summary = load_cursor_rows(start=end - timedelta(days=365), end=end)
+
+    assert summary.provider == "cursor"
+    assert summary.daily == []
+    assert summary.insights is not None
+    assert summary.insights.streaks.longest == 0

@@ -52,6 +52,10 @@ class CursorFetchAttempt:
     headers: dict[str, str]
 
 
+class CursorUsageExportAuthError(ValueError):
+    pass
+
+
 def get_cursor_default_state_db_path() -> Path:
     if os.sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "Cursor" / CURSOR_STATE_DB_RELATIVE_PATH
@@ -333,7 +337,7 @@ def fetch_cursor_usage_csv(access_token: str) -> str:
             failures.append(f"{status_line} ({body})" if body else status_line)
 
     summary = "; ".join(failures)
-    raise ValueError(
+    raise CursorUsageExportAuthError(
         f"Failed to authenticate Cursor usage export with local auth state from "
         f"{get_cursor_web_base_url()}. {summary}"
     )
@@ -439,5 +443,8 @@ def load_cursor_rows(start: datetime, end: datetime) -> UsageSummary:
         return create_usage_summary("cursor", totals, model_totals, recent_model_totals, end)
 
     recent_start = get_recent_window_start(end, 30)
-    content = fetch_cursor_usage_csv(auth_state.access_token)
+    try:
+        content = fetch_cursor_usage_csv(auth_state.access_token)
+    except CursorUsageExportAuthError:
+        return create_usage_summary("cursor", totals, model_totals, recent_model_totals, end)
     return summarize_cursor_usage_csv_text(content, start, end, recent_start)
